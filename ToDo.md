@@ -103,3 +103,13 @@ Implementation checklist for the SY-01B controller. Derived from [DESIGN.md](DES
 - [ ] Move §11 open questions from DESIGN.md to GitHub issues once the first one needs an answer
 - [ ] Add a `CHANGELOG.md` at the first tagged release
 - [x] Append to [LearnedPatterns.md](LearnedPatterns.md) as each ToDo item completes — categorized lessons (R/G/Q/W/E prefixes per §1–5), provenance `(from ToDo#N)`. Format mirrors https://github.com/coport-uni/CommonClaude/blob/main/LearnedPatterns.md
+
+## 14. Refactors after consolidation
+
+- [x] **Consolidation** (commit `7ff8a5f`, 2026-05-15): 6 source modules collapsed into one `SyringePumpController` class in `src/sy01b/syringe_pump_controller.py`. Fake-pump test layer removed; real pump on `/dev/ttyUSB1` is the ground truth.
+- [x] **Class + file rename** (commit `ef5edf9`): `Pump → SyringePumpController`; `pump.py → syringe_pump_controller.py`. Inner `PumpError` kept temporarily.
+- [x] **OOP cleanup, Path B** (in progress, 2026-05-15): Plan agent audit confirmed the single-class design is defensible. Two cosmetic fixes applied:
+  - `PumpError → Error` (5 token replacements) so `except SyringePumpController.Error:` no longer reads as a typo after the class rename.
+  - `Transport` Protocol nested in the class; `__init__` accepts `SyringePumpController.Transport` instead of concrete `serial.Serial`. Private attribute renamed `_serial → _transport`. Runtime behavior unchanged; `serial.Serial` satisfies the Protocol structurally and `serial.serial_for_url('loop://')` is now type-compatible for future testing.
+- [ ] **Path C** (defer): re-introduce concrete `_DTSerialTransport` nested class + restore fake-pump unit tests. Revisit only if motion-method iteration cycles prove impractical against real hardware.
+- [ ] **Path D** (avoid): full un-consolidation back to 6 modules. Only if requirements double.

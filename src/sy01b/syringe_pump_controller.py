@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from pathlib import Path
 from types import TracebackType
-from typing import ClassVar, Self
+from typing import ClassVar, Protocol, Self
 
 import serial
 
@@ -42,6 +42,24 @@ class SyringePumpController:
     """Single-class driver for the Runze SY-01B (DT protocol over CH340/RS-232)."""
 
     __version__: ClassVar[str] = "0.2.0.dev0"
+
+    # ----------------------------------------------------------- transport
+    class Transport(Protocol):
+        """Duck-typed interface for the pyserial subset that the controller uses.
+
+        The real ``serial.Serial`` class satisfies this Protocol structurally,
+        and so does ``serial.serial_for_url('loop://')`` for tests that need
+        to script byte-level replies without hardware. The Protocol exists
+        for type-checker honesty; runtime composition is unchanged.
+        """
+
+        is_open: bool
+
+        def read(self, size: int = 1, /) -> bytes: ...
+        def write(self, data: bytes, /) -> int | None: ...
+        def flush(self) -> None: ...
+        def reset_input_buffer(self) -> None: ...
+        def close(self) -> None: ...
 
     # ------------------------------------------------------------------ enums
     class ErrorCode(IntEnum):
@@ -73,10 +91,10 @@ class SyringePumpController:
             return 12_000 if self is SyringePumpController.StepMode.NORMAL else 96_000
 
     # ------------------------------------------------------------ exceptions
-    class PumpError(Exception):
+    class Error(Exception):
         """Base for every error raised by the SyringePumpController class."""
 
-    class TransportError(PumpError):
+    class TransportError(Error):
         """Anything wrong at the serial / framing layer."""
 
     class TransportTimeout(TransportError):
@@ -91,14 +109,14 @@ class SyringePumpController:
     class TransportClosed(TransportError):
         """Operation attempted on a closed transport."""
 
-    class ProtocolError(PumpError):
+    class ProtocolError(Error):
         """Reply bytes received but the frame is malformed."""
 
         def __init__(self, message: str, raw: bytes = b"") -> None:
             super().__init__(message)
             self.raw = raw
 
-    class DeviceError(PumpError):
+    class DeviceError(Error):
         """The pump device returned a non-OK error code in its status byte."""
 
         def __init__(
@@ -139,7 +157,7 @@ class SyringePumpController:
     class CommandOverflowError(DeviceError):
         """Error 15."""
 
-    class DiagnosticError(PumpError):
+    class DiagnosticError(Error):
         """Base for failures of the read-only diagnostic stage."""
 
     class DiagnosticTimeoutError(DiagnosticError):
@@ -301,11 +319,11 @@ class SyringePumpController:
     # ----------------------------------------------------------- construction
     def __init__(
         self,
-        serial_port: serial.Serial,
+        transport: SyringePumpController.Transport,
         address: int,
         reply_timeout_s: float,
     ) -> None:
-        self._serial = serial_port
+        self._transport = transport
         self._address = address
         self._reply_timeout_s = reply_timeout_s
 
@@ -326,7 +344,7 @@ class SyringePumpController:
         port.dtr = False
         port.rts = False
         logger.debug("opened %s @ %d 8N1 (DTR/RTS forced low)", cfg.port, cfg.baud)
-        return cls(port, cfg.address, cfg.reply_timeout_s)
+        return cls(transport=port, address=cfg.address, reply_timeout_s=cfg.reply_timeout_s)
 
     def __enter__(self) -> Self:
         return self
@@ -340,8 +358,8 @@ class SyringePumpController:
         self.close()
 
     def close(self) -> None:
-        if self._serial.is_open:
-            self._serial.close()
+        if self._transport.is_open:
+            self._transport.close()
             logger.debug("serial port closed")
 
     @property
@@ -400,16 +418,16 @@ class SyringePumpController:
 
     # --------------------------------------------------------- private I/O
     def _send_and_receive(self, frame: bytes) -> bytes:
-        if not self._serial.is_open:
+        if not self._transport.is_open:
             raise SyringePumpController.TransportClosed("serial port is not open")
         logger.debug("→ %s", _hex_preview(frame))
-        self._serial.reset_input_buffer()
-        self._serial.write(frame)
-        self._serial.flush()
+        self._transport.reset_input_buffer()
+        self._transport.write(frame)
+        self._transport.flush()
         buf = bytearray()
         deadline_anchor = time.monotonic()
         while True:
-            chunk = self._serial.read(64)
+            chunk = self._transport.read(64)
             if chunk:
                 buf.extend(chunk)
                 if SyringePumpController._ETX in buf:
