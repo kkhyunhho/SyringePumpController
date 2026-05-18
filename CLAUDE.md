@@ -108,4 +108,5 @@ Coverage targets: 90 % on `src/sy01b/` excluding `transport.py`'s real-serial pa
 ## Commit boundaries seen so far
 
 - **Planning trio commit:** DESIGN.md, ToDo.md, LearnedPatterns.md.
-- **Read-only API commit:** scaffolding + everything needed to open a port, run diagnose, retrieve software version (`?23`) and serial number (`?202`). Motion methods (`initialize`, `aspirate_uL`, `dispense_uL`, `abort`) are intentionally *not* shipped yet and the test suite asserts they are absent (`TestNoMotionCommandsExposed`). They land in a later commit with their own HIL-mock test plan.
+- **Read-only API commit:** scaffolding + everything needed to open a port, run diagnose, retrieve software version (`?23`) and serial number (`?202`).
+- **Valve motion commit:** non-distribution valve API (`initialize_valve`, `set_valve_position`, `wait_until_ready`) targeting the MCC-4 dual-selection valve. `examples/valve_toggle.py` is the bench-verification script that drives real toggling against `/dev/ttyUSB1`. Plunger motion (`initialize`, `aspirate_uL`, `dispense_uL`, `abort`, `move_to_steps`, `set_step_mode`, `set_stall_current`) is intentionally still absent and pinned by `TestNoPlungerMotionExposed` in `tests/test_plunger_motion_absent.py`.

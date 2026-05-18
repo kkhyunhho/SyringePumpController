@@ -2,8 +2,8 @@
 
 > Patterns extracted from [ToDo.md](ToDo.md) Completed items. Consult the relevant sections before drafting new ToDo entries. Append new patterns after each task completes.
 >
-> Last updated: 2026-05-15
-> Total patterns: 15
+> Last updated: 2026-05-18
+> Total patterns: 17
 >
 > Provenance format: `(from ToDo#N)` where N is the 1-based index of the top-level `##` section in `ToDo.md` at the time of extraction. Patterns extracted from design rather than from completed work use `(from DESIGN.md §N)` until a corresponding ToDo item lands.
 
@@ -127,6 +127,16 @@
 
 - **Note**: After power-on and before `ZR`, the lab pump's `Q` reply decoded to `busy=True, error=OK` (status byte `0x60`). The pump is not actually moving — it is sitting uninitialized — yet the busy bit is set. CLAUDE.md already warns that the busy bit on *non-Q* replies is unreliable; this run shows the bit on `Q` itself is also misleading in the pre-init state.
 - **Rule**: Do not use `Q`'s busy bit alone to decide "is it safe to send a move?" in pre-init contexts. The diagnostic flow's `ok_to_initialize` criterion correctly looks only at the error nibble (`error in {OK, NOT_INITIALIZED}`), not at busy. When `_wait_until_ready` is implemented for motion commands, treat the busy bit as informative only on `Q` replies that follow a known motion command, and even then cross-check against elapsed time. (from consolidation HIL)
+
+### E5. `Q` busy bit is permanently True on firmware 8.33 — even post-init, even when buffer is empty
+
+- **Note**: After valve init (`w1,0R`) and several successful valve moves, the lab pump's `Q` continued to report `busy=True, error=OK` (status byte `0x60`) indefinitely. Cross-checks: `?10` (buffer status) returned `0` (empty), `?6` returned a stable port number, the motor was audibly silent, and subsequent motion commands still executed normally. The busy bit is therefore **not** a reliable "motor is moving" indicator on this firmware revision — it appears latched on after the first valve home and never clears. This extends E4: the busy unreliability is not limited to pre-init.
+- **Rule**: `wait_until_ready` (polls `Q.busy`) cannot be used as a motion-completion signal on firmware 8.33. For valve moves, poll `?6` until it reports the target port (`SyringePumpController._wait_for_valve_position`). For valve init, poll `?6` until it stops returning the literal `?` (E3). For future plunger work, prefer elapsed-time bounds + `?` (plunger position) over `Q.busy`. The method `wait_until_ready` is retained for parity with the manual's documented protocol but its docstring flags the unreliability. (from HIL 2026-05-18 valve toggle)
+
+### E6. Firmware 8.33 treats the attached MCC-4 as a 4-way distribution valve
+
+- **Note**: The user's bench setup uses a Runze MCC-4 (a 4-port non-distribution valve with two physically reachable rotor states: `C-1 & 2-3 connected` and `C-3 & 1-2 connected`). The manual asserts non-distribution valves report `?6` as mnemonics `i`/`o`/`b`/`e` and accept the bare commands `I`/`O`/`B`/`E`. Empirically on firmware 8.33: `?76` reports `4 way|9600|100K|TSY|high|XLP|AUTO` (distribution-valve config), `?6` answers with ASCII digit `1`..`4`, and the firmware accepts both bare `I`/`O` (mapped to default-input port 1 / default-output port 4) AND distribution syntax `I<n>R` / `O<n>R`. The user's two MCC-4 states therefore correspond to **distribution port 1 (C-1) and port 3 (C-3)**, not to the manual's `I`/`O` mnemonics. Verified by `examples/valve_toggle.py` running 20/20 moves with `?6` returning `'1'`/`'3'`.
+- **Rule**: Do not assume `?76`'s valve-type field matches the physically attached valve. The firmware's distribution-vs-non-distribution mode is set at the factory (or via `U` commands) independent of what valve hardware is present. When `?6` returns digits, use `move_valve_to_port(n)` (distribution `I<n>R`/`O<n>R`); when it returns letters, use `set_valve_position(ValvePosition.X)`. For an MCC-4 on a 4-way-configured pump, port 1 ↔ port 3 is the right toggle pair. (from HIL 2026-05-18 valve toggle)
 
 ---
 

@@ -48,6 +48,22 @@ class TestBuildCommand:
         with pytest.raises(ValueError, match="buffer"):
             SyringePumpController.build_command(1, "A" * 256)
 
+    @pytest.mark.parametrize(
+        ("cmds", "expected"),
+        [
+            ("I", b"/1IR\r"),
+            ("O", b"/1OR\r"),
+            ("I1", b"/1I1R\r"),
+            ("I3", b"/1I3R\r"),
+            ("O1", b"/1O1R\r"),
+            ("O3", b"/1O3R\r"),
+            ("w1,0", b"/1w1,0R\r"),
+            ("w2,1", b"/1w2,1R\r"),
+        ],
+    )
+    def test_valve_motion_frames(self, cmds: str, expected: bytes) -> None:
+        assert SyringePumpController.build_command(1, cmds, execute=True) == expected
+
 
 def _frame(status_byte: int, data: bytes = b"") -> bytes:
     return b"/0" + bytes([status_byte]) + data + ETX + b"\r\n"

@@ -12,8 +12,9 @@ diagnostic-flow rationale.
 Limitations:
 - Pickling nested dataclasses is unsupported (pickle resolves classes by
   qualified name and gets confused inside other classes).
-- Motion methods (initialize, aspirate, dispense, abort) are not in this
-  milestone. The defensive read-only surface is the entire public API.
+- Plunger motion methods (initialize, aspirate, dispense, abort) are not in
+  this milestone. Valve motion is shipped (initialize_valve, set_valve_position,
+  wait_until_ready); plunger absence is pinned by TestNoPlungerMotionExposed.
 """
 
 from __future__ import annotations
@@ -89,6 +90,31 @@ class SyringePumpController:
         @property
         def full_stroke_steps(self) -> int:
             return 12_000 if self is SyringePumpController.StepMode.NORMAL else 96_000
+
+    class ValvePosition(StrEnum):
+        """Non-distribution valve states. Command bytes (uppercase); ?6 replies in lowercase.
+
+        For the MCC-4 dual-selection valve, only INPUT and OUTPUT are physically meaningful;
+        BYPASS and EXTRA are included for the broader non-distribution valve family.
+        """
+
+        INPUT = "I"
+        OUTPUT = "O"
+        BYPASS = "B"
+        EXTRA = "E"
+
+        @classmethod
+        def from_query_reply(cls, text: str) -> SyringePumpController.ValvePosition | None:
+            """Normalize a ``?6`` reply to the enum, or None if the pump has not been initialized.
+
+            Pre-init the SY-01B returns the literal byte ``?`` for ``?6`` (LearnedPatterns E3),
+            which is not a valid position. Returns None in that case so callers can branch
+            on "init not yet done" without catching ValueError.
+            """
+            normalized = text.strip().upper()
+            if normalized in {"", "?"}:
+                return None
+            return cls(normalized)
 
     # ------------------------------------------------------------ exceptions
     class Error(Exception):
@@ -301,6 +327,12 @@ class SyringePumpController:
     CMD_QUERY_VALVE_POSITION: ClassVar[str] = "?6"
     CMD_QUERY_PLUNGER_POSITION: ClassVar[str] = "?"
 
+    CMD_VALVE_INPUT: ClassVar[str] = "I"
+    CMD_VALVE_OUTPUT: ClassVar[str] = "O"
+    CMD_VALVE_BYPASS: ClassVar[str] = "B"
+    CMD_VALVE_EXTRA: ClassVar[str] = "E"
+    CMD_VALVE_INIT: ClassVar[str] = "w"
+
     _ETX: ClassVar[bytes] = b"\x03"
     _ADDR_FIRST: ClassVar[int] = ord("1")
 
@@ -453,6 +485,16 @@ class SyringePumpController:
         frame = SyringePumpController.build_command(self._address, cmds)
         return SyringePumpController.parse_reply(self._send_and_receive(frame))
 
+    def _execute(self, cmds: str) -> SyringePumpController.Reply:
+        """Send ``cmds`` with trailing R; raise a typed DeviceError on non-OK status."""
+        frame = SyringePumpController.build_command(self._address, cmds, execute=True)
+        raw = self._send_and_receive(frame)
+        reply = SyringePumpController.parse_reply(raw)
+        if reply.status.error is not SyringePumpController.ErrorCode.OK:
+            err_cls = SyringePumpController.device_error_for(reply.status.error)
+            raise err_cls(reply.status.error, cmds, raw)
+        return reply
+
     def _decode_ascii(self, data: bytes, name: str) -> str:
         try:
             return data.decode("ascii").strip()
@@ -506,6 +548,147 @@ class SyringePumpController:
             raise SyringePumpController.ProtocolError(
                 f"plunger position reply is not a number: {text!r}"
             ) from exc
+
+    # ---------------------------------------------------- motion: valve
+    def wait_until_ready(
+        self,
+        timeout_s: float = 5.0,
+        poll_interval_s: float = 0.05,
+        initial_settle_s: float = 0.15,
+    ) -> None:
+        """Poll Q until busy=False. UNRELIABLE ON FIRMWARE 8.33: on the HIL pump observed
+        2026-05-18, Q.busy stays True indefinitely even when the pump is mechanically idle
+        and the buffer is empty (extends LearnedPatterns E4 from pre-init to post-init).
+
+        Prefer ``_wait_for_valve_position`` for valve moves (mechanical confirmation via
+        ``?6``) and a fixed sleep for plunger moves until a workaround for the stuck-busy
+        bit is found. This method is kept for parity with the manual's documented protocol
+        and may be useful on other firmware revisions or for explicit diagnostic timing.
+
+        Raises TransportTimeout if ``timeout_s`` elapses with busy still set; raises a typed
+        DeviceError if Q reports a non-OK error code. Logs at INFO if elapsed > 2.0 s.
+        """
+        deadline = time.monotonic() + timeout_s
+        start = time.monotonic()
+        if initial_settle_s > 0:
+            time.sleep(initial_settle_s)
+        while True:
+            status = self.query_status()
+            if status.error is not SyringePumpController.ErrorCode.OK:
+                err_cls = SyringePumpController.device_error_for(status.error)
+                raise err_cls(status.error, SyringePumpController.CMD_QUERY_STATUS, b"")
+            if not status.busy:
+                elapsed = time.monotonic() - start
+                if elapsed > 2.0:
+                    logger.info("wait_until_ready took %.2fs", elapsed)
+                return
+            if time.monotonic() >= deadline:
+                raise SyringePumpController.TransportTimeout(
+                    elapsed_s=timeout_s,
+                    frame_sent=SyringePumpController.CMD_QUERY_STATUS.encode("ascii"),
+                    partial=bytes([status.raw]),
+                )
+            time.sleep(poll_interval_s)
+
+    def _wait_for_valve_position(
+        self,
+        target: str,
+        *,
+        timeout_s: float = 3.0,
+        poll_interval_s: float = 0.05,
+    ) -> None:
+        """Poll ``?6`` until it returns ``target``. Used in place of ``wait_until_ready``
+        for valve moves on firmware 8.33 where Q.busy is unreliable. ``target`` should be
+        a normalized ``?6`` reply (e.g. ``"3"`` for distribution port 3, ``"i"`` for a
+        non-distribution input position)."""
+        deadline = time.monotonic() + timeout_s
+        target_norm = target.strip()
+        while True:
+            raw = self.query_valve_position().strip()
+            if raw == target_norm:
+                return
+            if time.monotonic() >= deadline:
+                raise SyringePumpController.TransportTimeout(
+                    elapsed_s=timeout_s,
+                    frame_sent=SyringePumpController.CMD_QUERY_VALVE_POSITION.encode("ascii"),
+                    partial=raw.encode("ascii"),
+                )
+            time.sleep(poll_interval_s)
+
+    def initialize_valve(
+        self,
+        *,
+        home_port: int = 1,
+        direction_ccw: bool = False,
+        settle_timeout_s: float = 5.0,
+    ) -> None:
+        """Initialize the valve drive only (``w<port>,<dir>R``). Does NOT move the plunger.
+
+        Safe for the SY-01B with a syringe that may contain liquid: only the valve actuator
+        homes. After the move, polls ``?6`` until it stops returning the pre-init literal
+        ``?`` (LearnedPatterns E3), confirming homing completed mechanically.
+        """
+        if not 1 <= home_port <= 4:
+            raise ValueError(f"home_port must be 1..4, got {home_port}")
+        direction = 1 if direction_ccw else 0
+        self._execute(f"{SyringePumpController.CMD_VALVE_INIT}{home_port},{direction}")
+        # ?6 returns '?' until home completes; poll until it returns a real position.
+        deadline = time.monotonic() + settle_timeout_s
+        while True:
+            raw = self.query_valve_position().strip()
+            if raw and raw != "?":
+                return
+            if time.monotonic() >= deadline:
+                raise SyringePumpController.TransportTimeout(
+                    elapsed_s=settle_timeout_s,
+                    frame_sent=SyringePumpController.CMD_QUERY_VALVE_POSITION.encode("ascii"),
+                    partial=raw.encode("ascii"),
+                )
+            time.sleep(0.1)
+
+    def set_valve_position(self, position: SyringePumpController.ValvePosition | str) -> None:
+        """Move the valve to ``position`` (I/O/B/E mnemonic — for non-distribution valves).
+
+        WARNING: most SY-01B pumps are configured for distribution valves at the factory
+        (``?76`` reports ``X way|...``), in which case bare ``I``/``O`` resolve to the
+        default input/output port set during initialization (typically port 1 / port X),
+        NOT to user-specific MCC-4 dual-selection states. For distribution behavior use
+        ``move_valve_to_port(n)`` instead.
+
+        Requires ``initialize_valve`` first; otherwise pump responds with error 7.
+        """
+        pos = (
+            SyringePumpController.ValvePosition(position) if isinstance(position, str) else position
+        )
+        if pos is SyringePumpController.ValvePosition.BYPASS:
+            logger.warning("valve set to BYPASS — subsequent plunger moves will fail with error 11")
+        self._execute(pos.value)
+        # Fallback: fixed sleep because target port for bare I/O depends on init config.
+        time.sleep(0.7)
+
+    def move_valve_to_port(
+        self,
+        port: int,
+        *,
+        direction_ccw: bool = False,
+        settle_timeout_s: float = 3.0,
+    ) -> None:
+        """Move the valve to distribution port ``port`` via ``I<n>R`` (CW) or ``O<n>R``
+        (CCW). Verified complete by polling ``?6`` until it reports ``str(port)``.
+
+        Requires ``initialize_valve`` first. For MCC-4 dual-selection users: the C-1 and
+        C-3 states correspond to ``port=1`` and ``port=3`` respectively on a 4-way
+        distribution-configured pump (HIL 2026-05-18, firmware 8.33).
+        """
+        if not 1 <= port <= 16:
+            raise ValueError(f"port must be 1..16, got {port}")
+        cmd_letter = (
+            SyringePumpController.CMD_VALVE_OUTPUT
+            if direction_ccw
+            else SyringePumpController.CMD_VALVE_INPUT
+        )
+        self._execute(f"{cmd_letter}{port}")
+        self._wait_for_valve_position(str(port), timeout_s=settle_timeout_s)
 
     # ---------------------------------------------------- diagnostic flow
     def diagnose(self) -> SyringePumpController.DiagnosticsReport:

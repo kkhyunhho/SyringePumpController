@@ -9,7 +9,7 @@ Implementation checklist for the SY-01B controller. Derived from [DESIGN.md](DES
 - [x] Console script entry: `sy01b-diagnose = sy01b.cli.diagnose:main`
 - [x] Tool configs consolidated into `pyproject.toml` (`[tool.ruff]`, `[tool.mypy]`, `[tool.pytest.ini_options]`) — separate `ruff.toml`/`mypy.ini` not used
 - [x] `.github/workflows/ci.yml` — ruff + mypy + pytest on 3.12
-- [x] `src/sy01b/__init__.py`, `tests/__init__.py`, `tests/conftest.py`
+- [x] `src/sy01b/__init__.py`, `tests/__init__.py` (`tests/conftest.py` removed during consolidation refactor — see §14 commit `7ff8a5f`; not reintroduced)
 - [x] Update [CLAUDE.md](CLAUDE.md) §"Build, lint, test" with the actual `pytest` / `ruff` / `mypy` invocations
 
 ## 4. Transport layer (DT, CH340)
@@ -20,7 +20,7 @@ Implementation checklist for the SY-01B controller. Derived from [DESIGN.md](DES
 - [x] `send(frame: bytes, deadline_s: float) -> bytes` — write, then read until ETX or deadline
 - [x] Raise `TransportTimeout` with elapsed time on deadline miss
 - [x] Honor the by-id udev path (`/dev/serial/by-id/...`) — passes through to `serial.Serial(port=…)`
-- [x] `FakeTransport` for tests: takes a scripted list of `(expected_frame, reply_bytes)` pairs (in `tests/conftest.py`)
+- [ ] `FakeTransport` for tests (deferred): consolidation refactor (§14) removed the fake-pump test layer; real pump on `/dev/ttyUSB1` is the ground truth. Re-introduce only if motion-method iteration against real hardware proves impractical.
 - [ ] Real-hardware HIL probe for transport (post-shipping)
 
 ## 5. Protocol layer (pure)
@@ -31,7 +31,8 @@ Implementation checklist for the SY-01B controller. Derived from [DESIGN.md](DES
 - [x] `StatusByte` with `busy: bool`, `error: ErrorCode`
 - [x] `ErrorCode` `IntEnum` with all codes from CLAUDE.md error table + `UNKNOWN`
 - [x] Read-only command constants: `CMD_QUERY_STATUS`, `CMD_QUERY_SOFTWARE_VERSION`, `CMD_QUERY_SERIAL_NUMBER`, `CMD_QUERY_CONFIG`, `CMD_QUERY_SUPPLY_VOLTAGE`, `CMD_QUERY_VALVE_POSITION`, `CMD_QUERY_PLUNGER_POSITION`
-- [ ] Motion builders (later commit): `init_cw()`, `init_ccw()`, `abs_move(n)`, `rel_pickup(n)`, `rel_dispense(n)`, `valve_in()`, `valve_out()`, `valve_bypass()`, `valve_to(port)`, `set_step_mode(mode)`, `set_stall_current(n)`
+- [ ] Motion builders (later commit, plunger side): `init_cw()`, `init_ccw()`, `abs_move(n)`, `rel_pickup(n)`, `rel_dispense(n)`, `set_step_mode(mode)`, `set_stall_current(n)`
+- [x] Valve motion (non-distribution): `set_valve_position(I/O/B/E)` shipped via `_execute` + `wait_until_ready` on `SyringePumpController`. Distribution `valve_to(port)` deferred (MCC-4 uses non-distribution syntax).
 - [x] Reject command strings > 255 chars before they go on the wire
 - [x] No I/O, no global state in this module — easy to test exhaustively
 
@@ -40,10 +41,10 @@ Implementation checklist for the SY-01B controller. Derived from [DESIGN.md](DES
 - [x] `pump.py`: `Pump` class, `Pump.open(cfg) -> Pump` classmethod
 - [x] Context manager: `__enter__` returns self, `__exit__` closes transport only (no `T`, no re-init)
 - [x] Read-only query methods: `query_status`, `query_software_version`, `query_serial_number`, `query_config`, `query_supply_voltage_v`, `query_valve_position`, `query_plunger_position`
-- [ ] `initialize(force=0, *, ccw=False)` → `ZR` / `YR`; waits via `_wait_until_ready`
-- [ ] `_wait_until_ready(deadline_s)`: poll `Q`, exponential backoff capped at 100 ms, raise on error code or deadline
+- [ ] `initialize(force=0, *, ccw=False)` → `ZR` / `YR`; waits via `wait_until_ready` (plunger side; valve-only init shipped as `initialize_valve`)
+- [x] `wait_until_ready(timeout_s, poll_interval_s)`: poll `Q`, raise on error code or deadline. Public method, post-motion only (LearnedPatterns E4).
 - [ ] `aspirate_uL(uL)`, `dispense_uL(uL)`, `move_to_steps(steps)` — volume↔step conversion from cfg
-- [ ] `valve_to(port)` / `valve_in()` / `valve_out()` / `valve_bypass()` — single-shot, wait until ready
+- [x] `set_valve_position(I/O/B/E)` + `initialize_valve(home_port, direction_ccw)` — single-shot, wait until ready. Distribution `valve_to(port)` not yet needed (MCC-4 is non-distribution).
 - [ ] `abort()` — sends `T`, then sets `requires_reinit = True`
 - [ ] `requires_reinit` latch: error 1 and error 9 set it; move methods raise `RequiresReinitError` until `initialize()` clears it
 - [ ] `set_stall_current_for_syringe()` — derive `U200,<n>` from `cfg.syringe_uL` (see CLAUDE.md table)
@@ -80,7 +81,7 @@ Implementation checklist for the SY-01B controller. Derived from [DESIGN.md](DES
 ## 10. Testing
 
 - [x] `test_protocol.py`: round-trip every builder; parse every status code; reject malformed frames
-- [x] `test_pump_fake.py`: scripted sequence for read-only queries; defensive `TestNoMotionCommandsExposed` asserts motion methods are absent
+- [x] `test_pump_fake.py`: removed during §14 consolidation; replaced by `test_plunger_motion_absent.py` (asserts plunger motion still absent, valve motion present).
 - [x] `test_diagnostics_failures.py`: each hard-fail path raises the right exception; happy path emits a clean report
 - [x] `test_identity.py`: **the verification deliverable** — proves serial number + software version retrieval through the full stack
 - [x] `test_config.py`: validation + TOML loading; covers stall-current operand table
@@ -89,12 +90,13 @@ Implementation checklist for the SY-01B controller. Derived from [DESIGN.md](DES
 - [x] Coverage gate at 90 % on `src/sy01b/` excluding `transport.py` real-serial paths (current: ~95 %)
 - [ ] `examples/hil_smoke.md`: manual HIL checklist — **read-only only** (firmware, serial number, supply voltage, status, valve, plunger position). No `R`, no init, no moves.
 - [ ] `examples/hil_identity.py`: read-only identity probe script that drives the HIL checklist programmatically and prints a one-block summary
+- [x] `examples/valve_toggle.py`: bench script that toggles MCC-4 valve between INPUT and OUTPUT, verifying each move via `?6`. Plunger never moved.
 
 ## 11. Logging
 
 - [x] `_logging.py`: `logger = logging.getLogger("sy01b")` + `hex_preview()` helper, no handler registration at import
 - [x] Frame send/receive at DEBUG with hex preview
-- [ ] `_wait_until_ready` logs at INFO if elapsed > 2 s (will land with motion methods)
+- [x] `wait_until_ready` logs at INFO if elapsed > 2 s (shipped with valve motion).
 - [ ] Document `LOG=DEBUG sy01b-diagnose ...` recipe in `examples/repl_session.md`
 
 ## 13. Documentation hygiene (when code lands)
