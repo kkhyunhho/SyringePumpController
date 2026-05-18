@@ -6,7 +6,14 @@ Companion to [CLAUDE.md](CLAUDE.md) (protocol/hardware reference) and [DESIGN.md
 
 ## Status
 
-Pre-alpha (`0.2.0.dev0`). The **read-only commissioning API** is shipped and HIL-verified against a real pump on `/dev/ttyUSB1` (returns software `8.33`, serial `32656`). Motion methods (`initialize`, `aspirate_uL`, `dispense_uL`, `abort`) are **intentionally absent**; the test suite asserts that via `TestNoMotionCommandsExposed`. They land in a later commit with their own HIL-mock test plan.
+Pre-alpha (`0.2.0.dev0`). The following surfaces are shipped and HIL-verified on `/dev/ttyUSB1` (firmware `8.33`, serial `32656`, 125 µL syringe):
+
+- **Read-only commissioning** — `diagnose()`, identity / status / voltage / valve / plunger queries, `sy01b-diagnose` CLI.
+- **Valve motion** — `initialize_valve`, `set_valve_position`, `move_valve_to_port`.
+- **Plunger initialization** — `set_stall_current_for_syringe` (EEPROM stall current), `initialize` (`Z<force>R` / `Y<force>R`, polls `?6 != "?"` for completion).
+- **Plunger absolute moves** — `move_to_steps` (`A<n>R`, polls `?` until target).
+
+Volume-based aspirate / dispense, `abort` + `requires_reinit` latch, and `set_step_mode` remain intentionally absent (tracked in [#3](https://github.com/coport-uni/SyringePumpController/issues/3)). The test suite pins this boundary via `TestNoPlungerMotionExposed` / `TestPlungerInitPresent` in [tests/test_plunger_motion_absent.py](tests/test_plunger_motion_absent.py).
 
 ## If you've never used a syringe pump before
 
@@ -85,7 +92,7 @@ The builder is `SyringePumpController.build_command(address, cmds, *, execute=Fa
 
 Each code maps to a subclass of `SyringePumpController.Error` (`InitFailedError`, `PlungerOverloadError`, `CommandOverflowError`, …). `SyringePumpController.device_error_for(code)` exposes the mapping.
 
-> **Bus rule:** in serial mode the **only reliable busy/ready signal is `Q`**. Do not trust bit 5 on replies to other commands (see [CLAUDE.md](CLAUDE.md) and the manual).
+> **Bus rule:** the manual designates `Q` as the canonical busy/ready signal. On the bench pump's firmware 8.33, however, `Q.busy` is **permanently latched True** after the first valve home and never clears ([LearnedPatterns E5](LearnedPatterns.md)). This driver polls position queries (`?6` for valve, `?` for plunger) instead — see [LearnedPatterns E5 / E7](LearnedPatterns.md).
 
 ### Frames you'll see most often
 
@@ -95,10 +102,12 @@ Each code maps to a subclass of `SyringePumpController.Error` (`InitFailedError`
 | `/1?23\r` | Software version | `/0` + status + `8.33` + ETX | Cheapest connectivity check. |
 | `/1?202\r` | Serial number | `/0` + status + `32656` + ETX | Good first roundtrip. |
 | `/1*\r` | Supply voltage × 10 | `/0` + status + `240` + ETX | `240` → 24.0 V. Diagnose fails below 22 V. |
-| `/1?6\r` | Valve position | `/0` + status + `I`/`O`/… + ETX | `B` = bypass; later plunger moves will trip error 11. |
+| `/1?6\r` | Valve position | `/0` + status + `I`/`O`/digit + ETX | Pre-init returns the literal byte `?` (LearnedPatterns E3). On a 4-way-configured pump, post-init returns ASCII digit `1..4`. |
 | `/1?\r` | Plunger position (steps) | `/0` + status + integer + ETX | 0..12000 in `N0`. |
-| `/1ZR\r` | **Initialize** (CW polarity) | — | Canonical first motion command. **Not yet implemented in this driver.** |
-| `/1IA6000OA0R\r` | Aspirate to 6000, then dispense to 0 | — | Multi-step example. **Not yet implemented.** |
+| `/1U200,5R\r` | Set stall current for 50 µL – 1.25 mL syringe | `/0` + status + ETX | EEPROM-persistent; effective on the next power-up. |
+| `/1Z2R\r` | **Initialize** (CW, third force) | `/0` + status + ETX | Canonical first motion. After `Z`, poll `?6` until it stops returning `?` (LearnedPatterns E7). |
+| `/1A6000R\r` | Move plunger to absolute step 6000 | `/0` + status + ETX | Post-init top speed is 4000 pps → full stroke ≈ 3 s (LearnedPatterns E8). |
+| `/1I3R\r` | Move valve CW to distribution port 3 | `/0` + status + ETX | After move, poll `?6` until it equals `"3"`. |
 
 ## Install
 
@@ -129,19 +138,21 @@ The safest first action: verify wiring, voltage, and identity without moving any
 .venv/bin/sy01b-diagnose --port /dev/ttyUSB1 --address 1 --syringe-uL 125
 ```
 
-Successful output:
+Successful output (bench pump, 2026-05-18):
 
 ```
 SY-01B diagnostic report
   software version : 8.33
   serial number    : 32656
-  config           : ...
-  supply voltage   : 24.x V
-  valve position   : I
+  config           : 4 way|9600|100K|TSY|high|XLP|AUTO
+  supply voltage   : 24.0 V
+  valve position   : 4
   plunger position : 0 steps
-  pre-init status  : busy=False error=NOT_INITIALIZED
+  pre-init status  : busy=True error=OK
   ok to initialize : True
 ```
+
+`valve position` returns the literal `?` byte until the pump is initialized; afterwards it returns either a digit (`1..N`) on a distribution-configured valve or one of `i`/`o`/`b`/`e` on a non-distribution valve. `busy=True` on a *non*-`Q` reply or in pre-init contexts is firmware-quirky and not a reliable busy signal — see [LearnedPatterns E4 / E5](LearnedPatterns.md).
 
 ### Python
 
@@ -159,7 +170,7 @@ with SyringePumpController.open(cfg) as pump:
     print(report.render())
 ```
 
-The shortest working example against real hardware is [main.py](main.py) (just `?23` + `?202`).
+[main.py](main.py) is an end-to-end tutorial that exercises every shipped public method on real hardware (diagnose → identity queries → stall current → `initialize` → `move_to_steps` max/mid/min → `move_valve_to_port` 1↔3↔1). Narrower per-feature bench scripts live in [claude_test/](claude_test/) (see [Bench scripts](#bench-scripts)).
 
 ## When diagnose fails
 
@@ -175,32 +186,60 @@ The shortest working example against real hardware is [main.py](main.py) (just `
 
 Everything is reachable from a single import: `from sy01b import SyringePumpController`.
 
+**Protocol & framing**
 - DT ASCII frame builder/parser and status-byte decode (`build_command`, `parse_reply`, `StatusByte`).
 - Pump error code → exception mapping under `SyringePumpController.Error` (`DeviceError`, `InitFailedError`, `PlungerOverloadError`, `CommandOverflowError`, …).
 - Transport- and diagnostic-layer exceptions (`TransportError`, `ProtocolError`, `DiagnosticError`).
-- `SyringePumpController.Config` — frozen dataclass with TOML loader and syringe-size → stall-current lookup.
-- Read-only queries: `query_status` (`Q`), `query_software_version` (`?23`), `query_serial_number` (`?202`), `query_config` (`?76`), `query_supply_voltage_v` (`*`), `query_valve_position` (`?6`), `query_plunger_position` (`?`).
-- `diagnose()` flow → `DiagnosticsReport`.
-- `sy01b-diagnose` console script.
+
+**Configuration**
+- `SyringePumpController.Config` — frozen dataclass with TOML loader, syringe-size → stall-current lookup, and step-mode → full-stroke-step lookup.
+
+**Read-only queries** (no `R` ever appended)
+- `query_status` (`Q`), `query_software_version` (`?23`), `query_serial_number` (`?202`), `query_config` (`?76`), `query_supply_voltage_v` (`*`), `query_valve_position` (`?6`), `query_plunger_position` (`?`).
+- `diagnose()` → `DiagnosticsReport` and `sy01b-diagnose` console script (both refuse to send `R`/`Z`/`Y`/`W`).
+
+**Valve motion**
+- `initialize_valve(home_port, direction_ccw)` — valve-only home (`w<port>,<dir>R`), polls `?6` until non-`?`.
+- `set_valve_position(I/O/B/E)` — non-distribution shortest-path move.
+- `move_valve_to_port(port, direction_ccw)` — distribution CW (`I<n>R`) / CCW (`O<n>R`), polls `?6` until target.
+
+**Plunger initialization & step moves**
+- `set_stall_current_for_syringe()` — `U200,<n>R`, operand derived from `Config.syringe_uL` (EEPROM-persistent).
+- `initialize(*, force, ccw, settle_timeout_s)` — `Z<force>R` / `Y<force>R`, polls `?6` until non-`?` (LearnedPatterns E7).
+- `move_to_steps(steps, *, settle_timeout_s, poll_interval_s)` — `A<n>R`, polls `?` until target matches.
+
+**Other**
+- `wait_until_ready()` — `Q`-polling with backoff. Retained for parity with the manual; unreliable on firmware 8.33 (LearnedPatterns E5).
 
 ## What's not yet implemented
 
-The motion surface is the next milestone. See [ToDo.md](ToDo.md) for the full checklist:
+The remaining plunger-side surface. See [#3](https://github.com/coport-uni/SyringePumpController/issues/3) and [ToDo.md §6 / §16](ToDo.md):
 
-- `initialize(...)` — `ZR` / `YR` with force and direction options.
-- `aspirate_uL` / `dispense_uL` / `move_to_steps` with volume↔step conversion.
-- `valve_to` / `valve_in` / `valve_out` / `valve_bypass`.
-- `abort()` and the `requires_reinit` latch.
-- `_wait_until_ready` (`Q`-polling with backoff).
+- `aspirate_uL(uL)` / `dispense_uL(uL)` — volume↔step conversion driven by `Config`.
+- `abort()` — `TR` plus the `requires_reinit` latch (errors 1 and 9 also set it).
+- `set_step_mode(mode)` — `N0`/`N1`/`N2` configuration.
+- `raw(cmds)` — escape hatch for commands not modelled above.
+
+Read-only HIL identity probes (`claude_test/hil_smoke.md`, `hil_identity.py`) are tracked in [#4](https://github.com/coport-uni/SyringePumpController/issues/4); doc hygiene (`claude_test/repl_session.md`, `CHANGELOG.md`) in [#5](https://github.com/coport-uni/SyringePumpController/issues/5).
+
+## Bench scripts
+
+[claude_test/](claude_test/) holds debug and bench-verification scripts that drive real hardware (per [CommonClaude §3](https://github.com/coport-uni/CommonClaude/blob/main/CLAUDE.md)). They are **not** part of CI — production unit tests live in [tests/](tests/). The index with HIL findings is in [claude_test/README.md](claude_test/README.md).
+
+| Script | Purpose |
+|---|---|
+| [valve_toggle.py](claude_test/valve_toggle.py) | Toggle a distribution valve between two ports (default 1 ↔ 3) and verify each move via `?6`. Plunger never moves. |
+| [syringe_init.py](claude_test/syringe_init.py) | `diagnose()` → `set_stall_current_for_syringe()` → `initialize(force=2)`. Logs pre/post-init `?` and `?6` plus elapsed time. |
+| [plunger_cycle.py](claude_test/plunger_cycle.py) | After init, cycle the plunger through max → mid → min absolute positions for N cycles, verifying each move. |
 
 ## Develop
 
 ```bash
-.venv/bin/ruff check src tests          # lint
-.venv/bin/ruff format --check src tests # format check (no rewrites)
-.venv/bin/mypy                          # strict types on src/sy01b
-.venv/bin/pytest                        # full suite
+.venv/bin/ruff check src tests claude_test main.py            # lint
+.venv/bin/ruff format --check src tests claude_test main.py   # format check
+.venv/bin/mypy                                                # strict types on src/sy01b
+.venv/bin/pytest                                              # full suite (125 unit tests)
 .venv/bin/pytest --cov=sy01b --cov-report=term-missing
 ```
 
-Bench-learned lessons are collected in [LearnedPatterns.md](LearnedPatterns.md).
+Bench-learned lessons are collected in [LearnedPatterns.md](LearnedPatterns.md). Workflow conventions (claude_test/ vs tests/, CommonClaude inheritance, ToDo + GitHub-issue policy) are in [CLAUDE.md](CLAUDE.md).
