@@ -41,13 +41,13 @@ Implementation checklist for the SY-01B controller. Derived from [DESIGN.md](DES
 - [x] `pump.py`: `Pump` class, `Pump.open(cfg) -> Pump` classmethod
 - [x] Context manager: `__enter__` returns self, `__exit__` closes transport only (no `T`, no re-init)
 - [x] Read-only query methods: `query_status`, `query_software_version`, `query_serial_number`, `query_config`, `query_supply_voltage_v`, `query_valve_position`, `query_plunger_position`
-- [ ] `initialize(force=0, *, ccw=False)` → `ZR` / `YR`; waits via `wait_until_ready` (plunger side; valve-only init shipped as `initialize_valve`)
+- [x] `initialize(force=0, *, ccw=False, settle_timeout_s=30.0)` → `Z<force>R` / `Y<force>R`; polls `?` until plunger=0 (LearnedPatterns E5 makes `Q.busy` unreliable on firmware 8.33)
 - [x] `wait_until_ready(timeout_s, poll_interval_s)`: poll `Q`, raise on error code or deadline. Public method, post-motion only (LearnedPatterns E4).
 - [ ] `aspirate_uL(uL)`, `dispense_uL(uL)`, `move_to_steps(steps)` — volume↔step conversion from cfg
 - [x] `set_valve_position(I/O/B/E)` + `initialize_valve(home_port, direction_ccw)` — single-shot, wait until ready. Distribution `valve_to(port)` not yet needed (MCC-4 is non-distribution).
 - [ ] `abort()` — sends `T`, then sets `requires_reinit = True`
 - [ ] `requires_reinit` latch: error 1 and error 9 set it; move methods raise `RequiresReinitError` until `initialize()` clears it
-- [ ] `set_stall_current_for_syringe()` — derive `U200,<n>` from `cfg.syringe_uL` (see CLAUDE.md table)
+- [x] `set_stall_current_for_syringe()` — derive `U200,<n>` from `cfg.syringe_uL` (see CLAUDE.md table)
 - [ ] `raw(cmds: str) -> Reply` escape hatch for commands not modelled here (logs at WARN)
 
 ## 7. Diagnostic / commissioning flow
@@ -127,3 +127,19 @@ User direction: inherit from [coport-uni/CommonClaude](https://github.com/coport
 - [ ] Run `ruff format` to reflow all code to 80 cols; resolve any remaining `ruff check` / `mypy` / `pytest` failures.
 - [ ] Create GitHub issue documenting this reconciliation per CommonClaude §4 (mandatory).
 - [ ] Going forward: every new task gets a `ToDo.md` append + `gh issue create` BEFORE work begins. Older LP entries (G1–G6, Q1, W1–W6, E1–E4) keep their existing format per CommonClaude §10 "Once the file exists, this bootstrap procedure no longer applies".
+
+## 16. Plunger initialization (2026-05-18, #2)
+
+First plunger-motion API. Lands the canonical `/1ZR` init path designed in [DESIGN.md §6](DESIGN.md) and drops the corresponding entries from §6 below. Bench target: 125 µL syringe (empty), `/dev/ttyUSB1`, address 1, firmware 8.33. Force=2 (third) chosen for the 125 µL bench syringe (between manual's 50/100 µL=third and 250/500 µL=half bands). Tracked in [#2](https://github.com/coport-uni/SyringePumpController/issues/2).
+
+- [x] Refactor `SyringePumpController.__init__` to take `config: Config`; `open()` passes `config=cfg`. Address and reply_timeout cached on the instance for hot-path convenience.
+- [x] `set_stall_current_for_syringe()` → `U200,<n>R` derived from `Config.syringe_uL` (idempotent EEPROM write; no plunger motion).
+- [x] `initialize(*, force=0, ccw=False, settle_timeout_s=30.0)` → `Z<force>R` (or `Y<force>R`); poll `?6` until non-`?` (LearnedPatterns E7 — `? == 0` is unsafe when pre-init plunger is already at 0; `Q.busy` is unreliable per E5).
+- [x] Update [tests/test_plunger_motion_absent.py](tests/test_plunger_motion_absent.py): drop `"initialize"` and `"set_stall_current"` from forbidden list; add `TestPlungerInitPresent` for `initialize`, `set_stall_current_for_syringe`, and `move_to_steps`. Remaining plunger-move symbols (`aspirate_uL`, `dispense_uL`, `abort`, `set_step_mode`) stay forbidden.
+- [x] Extend [tests/test_protocol.py](tests/test_protocol.py) with wire-frame round-trips for `U200,4/5/6 R`, `Z0/Z2/Y0/Z16 R`, and `A0/A6000/A12000/A96000 R`.
+- [x] New `claude_test/syringe_init.py`: open `/dev/ttyUSB1`, run `diagnose()` (W1 rule), set stall current, `initialize(force=2)`, log pre- and post-init `?`/`?6` and elapsed time. No further motion. Capacity sweep (25/50/100/125 µL) verified the U200 operand table on real hardware.
+- [x] **Extended in session**: added `move_to_steps(steps, *, settle_timeout_s=10.0)` → `A<steps>R`, polls `?` until target matches. Added `claude_test/plunger_cycle.py` exercising max(12 000) → mid(6 000) → min(0) cycles. HIL: 9/9 cycles verified.
+- [x] Append [claude_test/README.md](claude_test/README.md) index rows for `syringe_init.py` and `plunger_cycle.py`, including HIL findings.
+- [x] HIL run produced real timings/observations → appended E7 (Z completion signal) and E8 (post-init V=4000 pps default) to [LearnedPatterns.md](LearnedPatterns.md) in CommonClaude §10 form.
+- [x] Tick §6 lines for `initialize(...)` and `set_stall_current_for_syringe()`.
+- [ ] Remaining §6 plunger-side: `aspirate_uL` / `dispense_uL` (volume↔step conversion), `abort` + `requires_reinit` latch, `set_step_mode`, `raw(cmds)`. Defer to next milestone.

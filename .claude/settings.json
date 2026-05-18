@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh api *)",
+      "Read(//dev/**)",
+      "Bash(lsusb)",
+      "Bash(dmesg)",
+      "Bash(stty -F /dev/ttyUSB0 -a)",
+      "Read(//sys/class/tty/ttyUSB0/**)",
+      "Bash(git commit -m ' *)",
+      "Bash(.venv/bin/python -c \"from sy01b import Pump; print\\(Pump.__version__\\); print\\(Pump.StatusByte\\(busy=False, error=Pump.ErrorCode.OK, raw=0x40\\)\\); print\\(Pump.CMD_QUERY_SERIAL_NUMBER\\); cfg = Pump.Config\\(port='/dev/null', syringe_uL=125\\); print\\(cfg\\); print\\('step_mode default:', cfg.step_mode\\); print\\('stall:', cfg.stall_current_operand\\(\\)\\)\")",
+      "Bash(.venv/bin/ruff check *)",
+      "Bash(.venv/bin/ruff format *)",
+      "Bash(.venv/bin/mypy)",
+      "Bash(.venv/bin/pytest --cov=sy01b --cov-report=term-missing)",
+      "Bash(.venv/bin/python main.py)",
+      "Bash(.venv/bin/sy01b-diagnose --help)",
+      "Bash(.venv/bin/sy01b-diagnose --port /dev/ttyUSB1 --address 1 --syringe-uL 125)",
+      "Bash(grep -rEn \"Pump\\([^.A-Za-z_]|$\\)\" --include=\"*.py\" /workspace/SyringePumpController/src /workspace/SyringePumpController/tests /workspace/SyringePumpController/main.py)",
+      "Bash(git mv *)",
+      "Bash(.venv/bin/pytest -q)",
+      "Bash(ls /root/.claude/plans/ 2>/dev/null || echo \"plans dir does not exist\")",
+      "Read(//root/.claude/plans/**)",
+      "Bash(git -C /workspace/SyringePumpController log --oneline -n 20)",
+      "Bash(git -C /workspace/SyringePumpController remote -v)"
+    ],
+    "additionalDirectories": [
+      "/root/.claude/projects/-workspace-SyringePumpController"
+    ]
+  }
+}

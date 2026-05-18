@@ -1,9 +1,11 @@
 """Defensive test guarding the milestone boundary (LearnedPatterns W4).
 
-Valve motion (initialize_valve, set_valve_position, wait_until_ready) has shipped,
-but plunger motion methods are still intentionally absent. If a future commit
-accidentally adds e.g. ``aspirate_uL`` before the plunger-motion HIL plan is ready,
-this test fails loudly rather than letting the half-finished method ship.
+Plunger initialization (``initialize``, ``set_stall_current_for_syringe``)
+and absolute step-based motion (``move_to_steps``) have shipped. Volume-
+based aspirate/dispense, abort, and step-mode reconfiguration are still
+intentionally absent — if a future commit accidentally adds one before
+its HIL plan is ready, this test fails loudly rather than letting a
+half-finished method ship.
 """
 
 from __future__ import annotations
@@ -17,23 +19,22 @@ class TestNoPlungerMotionExposed:
     @pytest.mark.parametrize(
         "attr",
         [
-            "initialize",
             "aspirate_uL",
             "dispense_uL",
             "abort",
-            "move_to_steps",
             "set_step_mode",
-            "set_stall_current",
         ],
     )
     def test_attr_absent(self, attr: str) -> None:
         assert not hasattr(SyringePumpController, attr), (
-            f"{attr} appeared on the public API — was a plunger-motion commit landed prematurely?"
+            f"{attr} appeared on the public API — was a plunger-motion "
+            f"commit landed prematurely?"
         )
 
 
 class TestValveMotionPresent:
-    """Positive guard: the valve-motion surface this milestone ships must be present."""
+    """Positive guard: the valve-motion surface this milestone ships
+    must be present."""
 
     @pytest.mark.parametrize(
         "attr",
@@ -46,5 +47,25 @@ class TestValveMotionPresent:
     )
     def test_attr_present(self, attr: str) -> None:
         assert hasattr(SyringePumpController, attr), (
-            f"{attr} missing from the public API — was a valve-motion method removed?"
+            f"{attr} missing from the public API — was a valve-motion "
+            f"method removed?"
+        )
+
+
+class TestPlungerInitPresent:
+    """Positive guard: the plunger-init + step-move surface this
+    milestone ships must be present."""
+
+    @pytest.mark.parametrize(
+        "attr",
+        [
+            "initialize",
+            "set_stall_current_for_syringe",
+            "move_to_steps",
+        ],
+    )
+    def test_attr_present(self, attr: str) -> None:
+        assert hasattr(SyringePumpController, attr), (
+            f"{attr} missing from the public API — was a plunger method "
+            f"removed?"
         )

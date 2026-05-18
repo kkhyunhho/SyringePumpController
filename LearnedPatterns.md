@@ -142,6 +142,20 @@
 - **Fix**: Added `SyringePumpController.move_valve_to_port(port, *, direction_ccw)` using distribution syntax `I<n>R`/`O<n>R`. `claude_test/valve_toggle.py` toggles port 1 ↔ port 3 (the digits that correspond to the MCC-4's C-1 and C-3 states); HIL run verified 20/20 moves with `?6` returning `'1'`/`'3'`.
 - **Rule**: Never assume `?76`'s valve-type field matches the physically attached valve. When `?6` returns digits, use `move_valve_to_port(n)` (distribution syntax); when it returns letters, use `set_valve_position(ValvePosition.X)`. For MCC-4 on a 4-way-configured pump, port 1 ↔ port 3 is the right toggle pair. (from ToDo#6)
 
+### E7. `Z` init completion signal: poll `?6 != "?"`, not `? == 0`
+
+- **Problem**: First HIL run of `claude_test/syringe_init.py` returned in 0.10 s reporting init success — but `?6` came back as the literal `?` byte (meaning init was still in progress), and the plunger had not actually moved through a full stroke. The "verified" run was a false positive.
+- **Cause**: Z mechanically homes the plunger to top-of-stroke and back to position 0, then homes the valve. `initialize()` was polling `?` (plunger position) for `== 0` as the completion signal. When a prior session left the plunger at 0, that condition is satisfied trivially on the first poll — long before the firmware has even started executing the Z command. `?` does not transition through intermediate values reliably enough to be a safe completion signal when pre-init position is already 0.
+- **Fix**: Switched the `initialize()` poll target to `?6` (valve position), waiting for it to stop returning the literal `?` byte (the same pattern as `initialize_valve`). The firmware sequences plunger then valve, so `?6` becoming a real port number is the unambiguous "Z complete" signal. After the fix, HIL init runs take ~3.86 s on the bench pump, matching expectations for a force=2 Z over a 125 µL syringe.
+- **Rule**: For plunger init (`Z`/`Y`), the completion signal is `?6 != "?"`. Plunger-position polling (`? == target`) is correct only for `move_to_steps()` where the target is asserted by the caller as something the plunger should reach; using it for init is unsafe when pre-init position already matches the target. (from ToDo#16)
+
+### E8. Post-init plunger top speed defaults to V=4000 pps on firmware 8.33
+
+- **Problem**: First plan for `claude_test/plunger_cycle.py` assumed full-stroke (12 000 half-steps) would take ~24 s, matching the manual's default init speed of 500 pps (lines 1626-1632). Settle-timeout budgets were sized accordingly.
+- **Cause**: The manual's "500 pps" figure is the *init speed*, not the post-init move speed. After Z resets `v`/`V`/`c`/`S`/`L` to defaults, `V` (top speed) sits at 4000 pps. A subsequent `A<n>R` move uses V, not the init speed. The result: full stroke takes ~3.0 s, not ~24 s. Half stroke ~1.5 s.
+- **Fix**: Bench-script `--settle-timeout-s` default lowered to 10 s for `move_to_steps()` (8× the observed move time, plenty of margin). HIL on 2026-05-18: 3.26 s for full stroke, 1.6 s for half stroke, 9/9 cycles verified. The settle-timeout for `initialize()` itself stays at 30 s because init does run at the slower 500 pps.
+- **Rule**: When sizing move timeouts on this firmware, use V=4000 pps post-init, not the manual's init-speed figure. Init is the slow operation; subsequent moves are an order of magnitude faster unless `V` is explicitly lowered. (from ToDo#16)
+
 ---
 
 ## §99. Uncategorized

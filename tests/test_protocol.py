@@ -70,6 +70,41 @@ class TestBuildCommand:
             == expected
         )
 
+    @pytest.mark.parametrize(
+        ("cmds", "expected"),
+        [
+            ("U200,4", b"/1U200,4R\r"),
+            ("U200,5", b"/1U200,5R\r"),
+            ("U200,6", b"/1U200,6R\r"),
+            ("Z0", b"/1Z0R\r"),
+            ("Z2", b"/1Z2R\r"),
+            ("Y0", b"/1Y0R\r"),
+            ("Z16", b"/1Z16R\r"),
+        ],
+    )
+    def test_plunger_init_frames(self, cmds: str, expected: bytes) -> None:
+        assert (
+            SyringePumpController.build_command(1, cmds, execute=True)
+            == expected
+        )
+
+    @pytest.mark.parametrize(
+        ("cmds", "expected"),
+        [
+            ("A0", b"/1A0R\r"),
+            ("A6000", b"/1A6000R\r"),
+            ("A12000", b"/1A12000R\r"),
+            ("A96000", b"/1A96000R\r"),
+        ],
+    )
+    def test_plunger_absolute_move_frames(
+        self, cmds: str, expected: bytes
+    ) -> None:
+        assert (
+            SyringePumpController.build_command(1, cmds, execute=True)
+            == expected
+        )
+
 
 def _frame(status_byte: int, data: bytes = b"") -> bytes:
     return b"/0" + bytes([status_byte]) + data + ETX + b"\r\n"

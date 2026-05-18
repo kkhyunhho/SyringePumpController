@@ -12,9 +12,10 @@ diagnostic-flow rationale.
 Limitations:
 - Pickling nested dataclasses is unsupported (pickle resolves classes by
   qualified name and gets confused inside other classes).
-- Plunger motion methods (initialize, aspirate, dispense, abort) are not in
-  this milestone. Valve motion is shipped (initialize_valve, set_valve_position,
-  wait_until_ready); plunger absence is pinned by TestNoPlungerMotionExposed.
+- Plunger-motion API ships ``initialize`` and ``set_stall_current_for_syringe``
+  alongside valve motion. The next-milestone symbols (``aspirate_uL``,
+  ``dispense_uL``, ``abort``, ``move_to_steps``, ``set_step_mode``) are still
+  intentionally absent and pinned by TestNoPlungerMotionExposed.
 """
 
 from __future__ import annotations
@@ -368,12 +369,12 @@ class SyringePumpController:
     def __init__(
         self,
         transport: SyringePumpController.Transport,
-        address: int,
-        reply_timeout_s: float,
+        config: SyringePumpController.Config,
     ) -> None:
         self._transport = transport
-        self._address = address
-        self._reply_timeout_s = reply_timeout_s
+        self._config = config
+        self._address = config.address
+        self._reply_timeout_s = config.reply_timeout_s
 
     @classmethod
     def open(cls, cfg: SyringePumpController.Config) -> Self:
@@ -394,11 +395,7 @@ class SyringePumpController:
         logger.debug(
             "opened %s @ %d 8N1 (DTR/RTS forced low)", cfg.port, cfg.baud
         )
-        return cls(
-            transport=port,
-            address=cfg.address,
-            reply_timeout_s=cfg.reply_timeout_s,
-        )
+        return cls(transport=port, config=cfg)
 
     def __enter__(self) -> Self:
         return self
@@ -743,6 +740,135 @@ class SyringePumpController:
         )
         self._execute(f"{cmd_letter}{port}")
         self._wait_for_valve_position(str(port), timeout_s=settle_timeout_s)
+
+    # --------------------------------------------------- motion: plunger
+    def set_stall_current_for_syringe(self) -> None:
+        """Persist stall current for the configured syringe (``U200,<n>R``).
+
+        Effective on the next power-up (EEPROM-persistent); idempotent.
+        ``n`` is derived from ``Config.syringe_uL`` via the manual's table
+        (25 µL -> 4, 50 µL-1.25 mL -> 5, 2.5/5 mL -> 6).
+
+        Recovery: if a subsequent ``initialize()`` fails due to
+        backpressure, send ``U200,<n+1>R`` (raw) and retry per manual
+        precautions.
+        """
+        operand = self._config.stall_current_operand()
+        self._execute(f"U200,{operand}")
+
+    def initialize(
+        self,
+        *,
+        force: int = 0,
+        ccw: bool = False,
+        settle_timeout_s: float = 30.0,
+    ) -> None:
+        """Initialize plunger and valve (``Z<force>R`` / ``Y<force>R``).
+
+        Plunger travels to top of stroke, backs off by the ``k`` increment,
+        and sets that as position 0. Valve homes CW (``Z``) or CCW (``Y``).
+        Per the manual, ``v``/``V``/``c``/``S``/``L`` reset to defaults;
+        ``N`` (step mode) is preserved.
+
+        Args:
+            force: ``0`` = full force (default, ≥1 mL syringes);
+                ``1`` = half (250/500 µL); ``2`` = one-third (50/100 µL);
+                ``10..40`` = an S-code speed (lower = slower init).
+            ccw: send ``Y`` instead of ``Z`` so the valve homes CCW.
+            settle_timeout_s: max wait for completion. Full stroke at the
+                default 500 pps across 12 000 half-steps ≈ 24 s; 30 s
+                gives margin.
+
+        Raises:
+            InitFailedError: pump reported code 1.
+            TransportTimeout: valve never settled out of the pre-init
+                ``?`` state within ``settle_timeout_s``.
+
+        Polls ``?6`` (valve position) until it stops returning the
+        literal pre-init ``?`` byte. ``?`` polling on the plunger is
+        not reliable here: pre-init the plunger is already at 0
+        whenever a prior session left it there, so a "did it reach 0"
+        check exits before mechanical homing has even started. The
+        firmware sequences plunger then valve, so a real ``?6`` value
+        is the unambiguous "init complete" signal (same pattern as
+        ``initialize_valve``). ``Q.busy`` is unreliable on firmware
+        8.33 (LearnedPatterns E5).
+        """
+        if force not in (0, 1, 2) and not (10 <= force <= 40):
+            raise ValueError(f"force must be 0/1/2 or 10..40, got {force}")
+        cmd = "Y" if ccw else "Z"
+        self._execute(f"{cmd}{force}")
+        deadline = time.monotonic() + settle_timeout_s
+        while True:
+            raw = self.query_valve_position().strip()
+            if raw and raw != "?":
+                return
+            if time.monotonic() >= deadline:
+                raise SyringePumpController.TransportTimeout(
+                    elapsed_s=settle_timeout_s,
+                    frame_sent=(
+                        SyringePumpController.CMD_QUERY_VALVE_POSITION.encode(
+                            "ascii"
+                        )
+                    ),
+                    partial=raw.encode("ascii"),
+                )
+            time.sleep(0.2)
+
+    def move_to_steps(
+        self,
+        steps: int,
+        *,
+        settle_timeout_s: float = 10.0,
+        poll_interval_s: float = 0.1,
+    ) -> None:
+        """Move the plunger to absolute position ``steps`` (``A<steps>R``).
+
+        Range is ``0..Config.step_mode.full_stroke_steps`` (12 000 in
+        NORMAL/N0; 96 000 in FINE/N1 or MICRO/N2). Polls ``?`` until the
+        reported position equals ``steps`` (LearnedPatterns E5 — Q.busy
+        is unreliable on firmware 8.33).
+
+        Requires that ``initialize()`` has run; the firmware otherwise
+        reports error 7. The valve must not be in bypass — error 11.
+
+        Args:
+            steps: target absolute position, 0..full_stroke_steps.
+            settle_timeout_s: max wall-clock seconds to wait. The default
+                10 s covers a full stroke at the post-init top speed
+                (V=4000 pps over 12 000 half-steps ≈ 3 s) with margin.
+            poll_interval_s: seconds between ``?`` polls.
+
+        Raises:
+            ValueError: ``steps`` is outside the configured stroke range.
+            DeviceError subclass: pump rejected the move (e.g. error 7
+                if not initialized, 11 if valve is in bypass).
+            TransportTimeout: the reported position never matched
+                ``steps`` within ``settle_timeout_s``.
+        """
+        stroke = self._config.step_mode.full_stroke_steps
+        if not 0 <= steps <= stroke:
+            raise ValueError(
+                f"steps must be 0..{stroke} for step_mode "
+                f"{self._config.step_mode.name}, got {steps}"
+            )
+        self._execute(f"A{steps}")
+        deadline = time.monotonic() + settle_timeout_s
+        while True:
+            pos = self.query_plunger_position()
+            if pos == steps:
+                return
+            if time.monotonic() >= deadline:
+                raise SyringePumpController.TransportTimeout(
+                    elapsed_s=settle_timeout_s,
+                    frame_sent=(
+                        SyringePumpController.CMD_QUERY_PLUNGER_POSITION.encode(
+                            "ascii"
+                        )
+                    ),
+                    partial=str(pos).encode("ascii"),
+                )
+            time.sleep(poll_interval_s)
 
     # ---------------------------------------------------- diagnostic flow
     def diagnose(self) -> SyringePumpController.DiagnosticsReport:
