@@ -97,31 +97,18 @@ class SyringePumpController:
             )
 
     class ValvePosition(StrEnum):
-        """Non-distribution valve states. Command bytes (uppercase); ?6 replies in lowercase.
+        """Non-distribution valve states. Command bytes (uppercase); ?6
+        replies in lowercase.
 
-        For the MCC-4 dual-selection valve, only INPUT and OUTPUT are physically meaningful;
-        BYPASS and EXTRA are included for the broader non-distribution valve family.
+        For the MCC-4 dual-selection valve, only INPUT and OUTPUT are
+        physically meaningful; BYPASS and EXTRA are included for the
+        broader non-distribution valve family.
         """
 
         INPUT = "I"
         OUTPUT = "O"
         BYPASS = "B"
         EXTRA = "E"
-
-        @classmethod
-        def from_query_reply(
-            cls, text: str
-        ) -> SyringePumpController.ValvePosition | None:
-            """Normalize a ``?6`` reply to the enum, or None if the pump has not been initialized.
-
-            Pre-init the SY-01B returns the literal byte ``?`` for ``?6`` (LearnedPatterns E3),
-            which is not a valid position. Returns None in that case so callers can branch
-            on "init not yet done" without catching ValueError.
-            """
-            normalized = text.strip().upper()
-            if normalized in {"", "?"}:
-                return None
-            return cls(normalized)
 
     # ------------------------------------------------------------ exceptions
     class Error(Exception):
@@ -208,9 +195,6 @@ class SyringePumpController:
             )
             self.measured_v = measured_v
             self.min_v = min_v
-
-    class WrongAddressError(DiagnosticError):
-        """Reply parsed but the echoed address byte did not match the configured one."""
 
     # ------------------------------------------------------------- dataclasses
     @dataclass(frozen=True, slots=True)
@@ -346,8 +330,8 @@ class SyringePumpController:
 
     CMD_VALVE_INPUT: ClassVar[str] = "I"
     CMD_VALVE_OUTPUT: ClassVar[str] = "O"
-    CMD_VALVE_BYPASS: ClassVar[str] = "B"
-    CMD_VALVE_EXTRA: ClassVar[str] = "E"
+    # BYPASS ("B") and EXTRA ("E") flow through ValvePosition.BYPASS /
+    # .EXTRA — no separate CMD_ constants. Use ValvePosition members.
     CMD_VALVE_INIT: ClassVar[str] = "w"
 
     _ETX: ClassVar[bytes] = b"\x03"
@@ -585,23 +569,37 @@ class SyringePumpController:
             ) from exc
 
     # ---------------------------------------------------- motion: valve
+    #
+    # NOTE on ``wait_until_ready`` below — intentionally retained despite
+    # having no in-repo caller. The manual documents ``Q``-polling as the
+    # canonical busy/ready signal in serial mode (SY01BE.pdf §6, CLAUDE.md
+    # "Error model"), so we keep the method on the public API to honor that
+    # contract for callers on other firmware revisions or rigs where
+    # ``Q.busy`` actually clears. On the bench pump's firmware 8.33 the bit
+    # is permanently latched True (LearnedPatterns E5), so production code
+    # here uses position-polling helpers (``_wait_for_valve_position``,
+    # ``move_to_steps``'s ``?`` poll, ``initialize``'s ``?6 != "?"`` poll)
+    # instead. Removing this method would force every future caller on a
+    # well-behaved firmware to reimplement the same loop — keep it.
+    #
     def wait_until_ready(
         self,
         timeout_s: float = 5.0,
         poll_interval_s: float = 0.05,
         initial_settle_s: float = 0.15,
     ) -> None:
-        """Poll Q until busy=False. UNRELIABLE ON FIRMWARE 8.33: on the HIL pump observed
-        2026-05-18, Q.busy stays True indefinitely even when the pump is mechanically idle
-        and the buffer is empty (extends LearnedPatterns E4 from pre-init to post-init).
+        """Poll Q until busy=False. UNRELIABLE ON FIRMWARE 8.33 — see
+        ``LearnedPatterns E5``: ``Q.busy`` stays True indefinitely on the
+        bench pump even when mechanically idle.
 
-        Prefer ``_wait_for_valve_position`` for valve moves (mechanical confirmation via
-        ``?6``) and a fixed sleep for plunger moves until a workaround for the stuck-busy
-        bit is found. This method is kept for parity with the manual's documented protocol
-        and may be useful on other firmware revisions or for explicit diagnostic timing.
+        Retained as the manual-prescribed completion signal for callers on
+        other firmware revisions / rigs where ``Q.busy`` works correctly,
+        or for explicit diagnostic timing. Within this codebase, prefer
+        position polling (``?`` for plunger, ``?6`` for valve) instead.
 
-        Raises TransportTimeout if ``timeout_s`` elapses with busy still set; raises a typed
-        DeviceError if Q reports a non-OK error code. Logs at INFO if elapsed > 2.0 s.
+        Raises TransportTimeout if ``timeout_s`` elapses with busy still
+        set; raises a typed DeviceError if Q reports a non-OK error code.
+        Logs at INFO if elapsed > 2.0 s.
         """
         deadline = time.monotonic() + timeout_s
         start = time.monotonic()
@@ -691,18 +689,32 @@ class SyringePumpController:
                 )
             time.sleep(0.1)
 
+    # NOTE on ``set_valve_position`` below — intentionally retained even
+    # though no script in this repo calls it. The method is the only entry
+    # point to the manual's non-distribution valve mnemonics (``I``/``O``/
+    # ``B``/``E``) and to the ``ValvePosition`` enum's BYPASS / EXTRA
+    # states. The bench pump reports as 4-way distribution
+    # (LearnedPatterns E6), so ``move_valve_to_port(n)`` is the right
+    # call *here* — but on a rig where ``?6`` returns the lowercase
+    # mnemonic (true non-distribution valve), this method is the correct
+    # API. Keep it on the public surface so adopting such a rig doesn't
+    # require re-implementing the mnemonic path.
+    #
     def set_valve_position(
         self, position: SyringePumpController.ValvePosition | str
     ) -> None:
-        """Move the valve to ``position`` (I/O/B/E mnemonic — for non-distribution valves).
+        """Move the valve to ``position`` (I/O/B/E mnemonic — for
+        non-distribution valves).
 
-        WARNING: most SY-01B pumps are configured for distribution valves at the factory
-        (``?76`` reports ``X way|...``), in which case bare ``I``/``O`` resolve to the
-        default input/output port set during initialization (typically port 1 / port X),
-        NOT to user-specific MCC-4 dual-selection states. For distribution behavior use
+        WARNING: most SY-01B pumps are configured for distribution valves
+        at the factory (``?76`` reports ``X way|...``), in which case bare
+        ``I``/``O`` resolve to the default input/output port set during
+        initialization (typically port 1 / port X), NOT to user-specific
+        MCC-4 dual-selection states. For distribution behavior use
         ``move_valve_to_port(n)`` instead.
 
-        Requires ``initialize_valve`` first; otherwise pump responds with error 7.
+        Requires ``initialize_valve`` first; otherwise pump responds with
+        error 7.
         """
         pos = (
             SyringePumpController.ValvePosition(position)

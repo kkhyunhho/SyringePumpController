@@ -25,30 +25,3 @@ class TestValvePositionMembers:
     def test_str_construction(self) -> None:
         assert ValvePosition("I") is ValvePosition.INPUT
         assert ValvePosition("O") is ValvePosition.OUTPUT
-
-
-class TestFromQueryReply:
-    @pytest.mark.parametrize(
-        ("reply", "expected"),
-        [
-            ("i", ValvePosition.INPUT),
-            ("o", ValvePosition.OUTPUT),
-            ("b", ValvePosition.BYPASS),
-            ("e", ValvePosition.EXTRA),
-            ("I", ValvePosition.INPUT),
-            ("O", ValvePosition.OUTPUT),
-            ("  i\r\n  ", ValvePosition.INPUT),
-        ],
-    )
-    def test_valid(self, reply: str, expected: ValvePosition) -> None:
-        assert ValvePosition.from_query_reply(reply) is expected
-
-    @pytest.mark.parametrize("reply", ["?", "", "   ", "\r\n"])
-    def test_pre_init_returns_none(self, reply: str) -> None:
-        # LearnedPatterns E3: pre-init the pump returns the literal '?' for ?6.
-        assert ValvePosition.from_query_reply(reply) is None
-
-    @pytest.mark.parametrize("reply", ["X", "1", "io"])
-    def test_unknown_raises(self, reply: str) -> None:
-        with pytest.raises(ValueError, match="is not a valid"):
-            ValvePosition.from_query_reply(reply)
