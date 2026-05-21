@@ -215,6 +215,9 @@ Everything is reachable from a single import: `from sy01b import SyringePumpCont
 **Other**
 - `wait_until_ready()` — `Q`-polling with backoff. Retained for parity with the manual; unreliable on firmware 8.33 (LearnedPatterns E5).
 
+**Remote HTTP bridge** (Phase A of the ESP32 controller initiative, [#10](https://github.com/coport-uni/SyringePumpController/issues/10))
+- [server/](server/) — thin FastAPI bridge exposing the driver over `/v1/*` JSON for a remote ESP32-S3 client. Run `sy01b-server --config server/pump.toml` (binds `0.0.0.0:17046`, host PC LAN IP `192.168.1.129` on this bench). Single uvicorn worker + `asyncio.Lock` preserves the driver's single-in-flight contract; long ops (prime ~30 s) block the issuing request. See [server/README.md](server/README.md) for endpoint catalog and error mapping.
+
 ## What's not yet implemented
 
 The remaining plunger-side surface (see [ToDo.md §6](ToDo.md)):
@@ -237,11 +240,11 @@ Read-only HIL identity probes (`claude_test/hil_smoke.md`, `hil_identity.py`) ar
 ## Develop
 
 ```bash
-.venv/bin/ruff check src tests claude_test main.py            # lint
-.venv/bin/ruff format --check src tests claude_test main.py   # format check
-.venv/bin/mypy                                                # strict types on src/sy01b
-.venv/bin/pytest                                              # full suite (125 unit tests)
-.venv/bin/pytest --cov=sy01b --cov-report=term-missing
+.venv/bin/ruff check src tests claude_test server main.py            # lint
+.venv/bin/ruff format --check src tests claude_test server main.py   # format check
+.venv/bin/mypy                                                       # strict types on src/sy01b + server
+.venv/bin/pytest                                                     # full suite (145 unit tests, incl. tests/server/)
+.venv/bin/pytest --cov=sy01b --cov=server --cov-report=term-missing
 ```
 
 Bench-learned lessons are collected in [LearnedPatterns.md](LearnedPatterns.md). Workflow conventions (claude_test/ vs tests/, CommonClaude inheritance, ToDo + GitHub-issue policy) are in [CLAUDE.md](CLAUDE.md).

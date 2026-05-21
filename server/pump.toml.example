@@ -1,0 +1,18 @@
+# sy01b-server config — copy to server/pump.toml and edit for your bench.
+
+[pump]
+# CH340 USB-RS232 dongle. Prefer the by-id udev path so it survives
+# reboots in arrival-order /dev/ttyUSB* enumeration. See DESIGN.md §4.1.
+port = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+address = 1
+baud = 9600
+syringe_uL = 125
+step_mode = "NORMAL"
+reply_timeout_s = 1.0
+
+[server]
+# 0.0.0.0 so the LAN-side ESP32 can reach the bridge.
+# PC host LAN IP is 192.168.1.129 on this bench; clients hit that addr.
+host = "0.0.0.0"
+port = 17046
+log_level = "info"

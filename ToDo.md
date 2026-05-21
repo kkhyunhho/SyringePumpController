@@ -319,3 +319,78 @@ Out-of-scope (deliberately deferred — remain pinned-absent in
 - `abort` + `requires_reinit` latch
 - `set_step_mode`
 - `raw(cmds)` escape hatch
+
+## 20. FastAPI HTTP bridge server (2026-05-21, #10)
+
+Add a thin PC-side FastAPI server that exposes the existing
+`SyringePumpController` driver over `/v1/*` HTTP/JSON for a remote
+ESP32-S3 client. Server listens on **`0.0.0.0:17046`** (host PC
+LAN IP `192.168.1.129` on this bench). Driver stays unchanged —
+the server is a thin adapter that reuses `aspirate_uL` /
+`dispense_uL` / `move_valve_to_port` / `diagnose` / `initialize`
+and re-emits driver exceptions as JSON. Phase A of the ESP32
+controller initiative; firmware ships in a later phase (planned
+§21). Tracked in [#10](https://github.com/coport-uni/SyringePumpController/issues/10).
+
+- [ ] Create `server/` package: `__init__.py`, `app.py`
+  (`create_app(cfg)` + lifespan), `routes.py` (single APIRouter
+  under `/v1`), `schemas.py` (Pydantic request/response models),
+  `errors.py` (driver-exception → JSONResponse mapper),
+  `__main__.py` (uvicorn entry with `--config` flag),
+  `pump.toml.example`, `README.md`.
+- [ ] Endpoints: `GET /v1/health`, `GET /v1/diagnose`,
+  `POST /v1/initialize`, `POST /v1/valve`, `POST /v1/aspirate`,
+  `POST /v1/dispense`, `POST /v1/move_steps`, `POST /v1/prime`,
+  `GET /v1/status`.
+- [ ] `/v1/prime` replicates [claude_test/prime_line.py](claude_test/prime_line.py)
+  4-step loop (`move_valve_to_port(source)` → `move_to_steps(stroke)`
+  → `move_valve_to_port(sink)` → `move_to_steps(0)`). Defaults
+  `cycles=1, source_port=3, sink_port=1, ul_per_stroke=cfg.syringe_uL`.
+- [ ] Concurrency: `--workers 1` uvicorn + `app.state.pump_lock =
+  asyncio.Lock()`; every driver call wrapped in
+  `fastapi.concurrency.run_in_threadpool`.
+- [ ] Lifecycle: `SyringePumpController.open(cfg)` in lifespan
+  startup, `close()` on shutdown. `diagnose()` runs lazily on
+  first `/v1/diagnose` call (NOT at boot), cached on
+  `app.state.last_diagnose` for `/v1/health` to report `diagnose_ok`.
+- [ ] Error mapper: `400` ValueError / InvalidCommandError /
+  InvalidOperandError; `409` NotInitializedError /
+  PlungerBlockedByBypassError / CommandOverflowError; `500`
+  InitFailedError / PlungerOverloadError / ValveOverloadError /
+  unknown DeviceError; `502` ProtocolError; `503` TransportClosed
+  / DiagnosticError family; `504` TransportTimeout. JSON body
+  `{error, code, command, raw_reply_hex, message}` — no traceback.
+- [ ] Update [pyproject.toml](pyproject.toml):
+  `[project.optional-dependencies].server = ["fastapi>=0.115",
+  "uvicorn[standard]>=0.30"]`; `dev` adds `httpx>=0.27`;
+  `[tool.hatch.build.targets.wheel].packages` adds `"server"`;
+  `[project.scripts]` adds `sy01b-server = "server.__main__:main"`;
+  ruff/mypy targets extend to `server`, `tests/server`.
+- [ ] Add `tests/server/`: `conftest.py` with `FakePump`
+  (quacks like `SyringePumpController`, re-exports driver
+  exceptions for `isinstance`), FastAPI `TestClient`, lifespan
+  override; `test_routes.py` covering happy paths + error mapping
+  for every endpoint.
+- [ ] Update [README.md](README.md) — link to `server/README.md`,
+  document the 3-tier architecture.
+- [ ] Append commit-boundary bullet to [CLAUDE.md](CLAUDE.md)
+  "Commit boundaries seen so far"; note that the public driver
+  API surface is unchanged.
+- [ ] HIL: PC runs `python -m server --config server/pump.toml`
+  and `curl` against `/v1/diagnose`, `/v1/initialize`,
+  `/v1/valve`, `/v1/aspirate`, `/v1/dispense`, `/v1/prime` —
+  verify against real pump on `/dev/ttyUSB1`. ESP32 firmware
+  smoke test happens in §21.
+- [ ] If HIL surfaces non-obvious behaviour (timeout tuning,
+  concurrency race), append a Problem / Cause / Fix / Rule
+  entry to [LearnedPatterns.md](LearnedPatterns.md).
+- [ ] Single Conventional Commits commit closing #10;
+  `gh pr create` per CommonClaude §15.2 template.
+
+Out-of-scope for this server phase (handled later or never):
+
+- ESP32-S3 firmware (planned §21)
+- Multi-pump, TLS/auth, OTA, job-id queue, telemetry
+- Re-introducing the deleted `FakeTransport` driver-level fake
+  (§14 Path C remains deferred — fake lives only in `tests/server/`,
+  not `src/sy01b/`)
