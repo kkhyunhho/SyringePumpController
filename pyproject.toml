@@ -63,6 +63,9 @@ select = [
 ]
 ignore = [
     "E501",             # line too long (handled by formatter)
+    "N802",             # function naming (aspirate_uL / dispense_uL / _uL_to_steps — µL suffix is intentional)
+    "N803",             # argument naming (volume_uL / target_uL — µL suffix matches Config.syringe_uL)
+    "N806",             # local-variable naming (target_uL — µL suffix matches Config.syringe_uL)
     "N815",             # mixedCase var (syringe_uL in PumpConfig is intentional)
     "N818",             # error-class naming (TransportTimeout/TransportClosed read better as-is)
 ]

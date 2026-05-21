@@ -13,13 +13,13 @@ section to skip it.
     1. Open + diagnose            (read-only)
     2. Identity / status queries  (read-only)
     3. initialize()               (Z = plunger + valve home)
-    4. move_to_steps()            (plunger absolute moves)
+    4. aspirate_uL / dispense_uL  (plunger absolute volume moves)
     5. move_valve_to_port()       (valve distribution moves)
 
 Stall current (``U200,n``) is intentionally not exercised here — it is a
 one-shot commissioning step that must match the physically installed
-syringe (per-syringe table in the SY-01B manual). See
-``claude_test/syringe_init.py`` for the dedicated bench script.
+syringe (per-syringe table in the SY-01B manual). Set it out-of-band
+via the vendor terminal at commissioning time.
 
 Methods deliberately not shown here:
 - `initialize_valve(home_port, direction_ccw)` — valve-only init; a
@@ -109,24 +109,29 @@ def main() -> int:
             f"?6={pump.query_valve_position()!r}"
         )
 
-        # --- 4. Plunger absolute moves (A<n>R) --------------------------
-        # move_to_steps(n) sends A<n>R and polls ? until the reported
-        # position equals n. Range: 0..cfg.step_mode.full_stroke_steps
-        # (12 000 in NORMAL/N0). For 125 µL, each half-step ≈ 0.0104 µL.
-        stroke = cfg.step_mode.full_stroke_steps
+        # --- 4. Plunger volume moves (aspirate_uL / dispense_uL) --------
+        # aspirate_uL(V) and dispense_uL(V) both target an absolute
+        # contained volume V µL, converting internally to A<steps>R using
+        # cfg.syringe_uL and cfg.step_mode.full_stroke_steps. The split
+        # names exist so the caller's intent (fill vs drain) is visible at
+        # the call site — the wire-level operation is identical. For the
+        # raw half-step API see move_to_steps().
         print()
-        print(f"Plunger absolute moves (stroke = {stroke} half-steps):")
+        print(f"Plunger volume moves (syringe = {cfg.syringe_uL} µL):")
         targets = [
-            ("max", stroke),  # full aspirate (~125 µL drawn)
-            ("mid", stroke // 2),  # half aspirate (~62.5 µL drawn)
-            ("min", 0),  # fully dispensed (post-init home)
+            ("max", cfg.syringe_uL),  # full aspirate
+            ("mid", cfg.syringe_uL / 2),  # half aspirate
+            ("min", 0.0),  # fully dispensed (post-init home)
         ]
-        for label, steps in targets:
+        for label, target_uL in targets:
             t0 = time.monotonic()
-            pump.move_to_steps(steps)
+            if label == "min":
+                pump.dispense_uL()  # default target=0
+            else:
+                pump.aspirate_uL(target_uL)
             dt_ms = (time.monotonic() - t0) * 1000.0
             print(
-                f"  → {label} ({steps:>5} steps)  {dt_ms:6.1f} ms  "
+                f"  → {label} ({target_uL:>5.1f} µL)  {dt_ms:6.1f} ms  "
                 f"now ?={pump.query_plunger_position()}"
             )
 

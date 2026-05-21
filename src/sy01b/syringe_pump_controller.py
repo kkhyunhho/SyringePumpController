@@ -12,10 +12,11 @@ diagnostic-flow rationale.
 Limitations:
 - Pickling nested dataclasses is unsupported (pickle resolves classes by
   qualified name and gets confused inside other classes).
-- Plunger-motion API ships ``initialize`` and ``move_to_steps`` alongside
-  valve motion. The next-milestone symbols (``aspirate_uL``,
-  ``dispense_uL``, ``abort``, ``set_step_mode``) are still intentionally
-  absent and pinned by TestNoPlungerMotionExposed.
+- Plunger-motion API ships ``initialize``, ``move_to_steps``, and the
+  µL-volume wrappers ``aspirate_uL`` / ``dispense_uL`` alongside valve
+  motion. The remaining next-milestone symbols (``abort``,
+  ``set_step_mode``) are still intentionally absent and pinned by
+  TestNoPlungerMotionExposed.
 """
 
 from __future__ import annotations
@@ -229,7 +230,7 @@ class SyringePumpController:
         port: str
         address: int = 1
         baud: int = 9600
-        syringe_uL: int = 5000
+        syringe_uL: int = 125
         step_mode: SyringePumpController.StepMode = field(
             default_factory=lambda: SyringePumpController.StepMode.NORMAL
         )
@@ -853,6 +854,81 @@ class SyringePumpController:
                     partial=str(pos).encode("ascii"),
                 )
             time.sleep(poll_interval_s)
+
+    def _uL_to_steps(self, volume_uL: float) -> int:
+        """Convert a contained volume in µL to an absolute half-step target.
+
+        Uses ``Config.syringe_uL`` as the full-stroke reference and
+        ``Config.step_mode.full_stroke_steps`` as the step ceiling, rounding
+        to the nearest integer. Accepts ``int`` or ``float`` (``float`` is
+        the natural input on syringes whose half-volume is non-integer —
+        e.g. 62.5 µL on the 125 µL bench syringe).
+        """
+        syringe = self._config.syringe_uL
+        if not 0 <= volume_uL <= syringe:
+            raise ValueError(
+                f"volume_uL must be 0..{syringe} (Config.syringe_uL), "
+                f"got {volume_uL}"
+            )
+        full_stroke = self._config.step_mode.full_stroke_steps
+        return round(volume_uL / syringe * full_stroke)
+
+    def aspirate_uL(
+        self,
+        target_uL: float,
+        *,
+        settle_timeout_s: float = 10.0,
+        poll_interval_s: float = 0.1,
+    ) -> None:
+        """Move plunger so the syringe contains ``target_uL`` µL (absolute).
+
+        Converts ``target_uL`` to an absolute half-step position via
+        ``round(target_uL / Config.syringe_uL * full_stroke_steps)`` and
+        delegates to :meth:`move_to_steps`. The pump's ``A<n>`` command is
+        absolute, so the method is semantically a "set contained volume"
+        operation regardless of starting position; the ``aspirate`` name
+        signals the typical filling direction (current < target). Use
+        :meth:`dispense_uL` when the intent is emptying.
+
+        Args:
+            target_uL: target contained volume, ``0..Config.syringe_uL``.
+                ``int`` or ``float``.
+            settle_timeout_s: forwarded to :meth:`move_to_steps`.
+            poll_interval_s: forwarded to :meth:`move_to_steps`.
+
+        Raises:
+            ValueError: ``target_uL`` outside ``[0, Config.syringe_uL]``;
+                raised before any frame is sent.
+            DeviceError subclass / TransportTimeout: see
+                :meth:`move_to_steps`.
+        """
+        self.move_to_steps(
+            self._uL_to_steps(target_uL),
+            settle_timeout_s=settle_timeout_s,
+            poll_interval_s=poll_interval_s,
+        )
+
+    def dispense_uL(
+        self,
+        target_uL: float = 0,
+        *,
+        settle_timeout_s: float = 10.0,
+        poll_interval_s: float = 0.1,
+    ) -> None:
+        """Move plunger so the syringe contains ``target_uL`` µL (absolute).
+
+        Wire-level identical to :meth:`aspirate_uL` — same conversion, same
+        ``A<n>R`` frame — but named ``dispense`` so the call site reads
+        correctly when emptying (current > target). Default ``target_uL=0``
+        is the common "fully dispense" case.
+
+        See :meth:`aspirate_uL` for argument and error contract.
+        """
+        self.move_to_steps(
+            self._uL_to_steps(target_uL),
+            settle_timeout_s=settle_timeout_s,
+            poll_interval_s=poll_interval_s,
+        )
 
     # ---------------------------------------------------- diagnostic flow
     def diagnose(self) -> SyringePumpController.DiagnosticsReport:

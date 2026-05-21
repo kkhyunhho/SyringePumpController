@@ -1,20 +1,21 @@
-"""Cycle the plunger through max (full stroke) → middle → min positions.
+"""Cycle the plunger through max (full) → middle → min volumes.
 
 Bench script — runs against real hardware on /dev/ttyUSB1. After running
 `diagnose()` and `initialize(force=2)`, the plunger loops between three
-absolute positions (N0 / NORMAL step mode):
+absolute contained volumes driven by aspirate_uL / dispense_uL:
 
-    max = 12 000 half-steps (full aspirate, syringe fully drawn)
-    mid =  6 000 half-steps (half aspirate)
-    min =      0 half-steps (fully dispensed, post-init home)
+    max = syringe_uL     (full aspirate, syringe fully drawn)
+    mid = syringe_uL / 2 (half aspirate)
+    min = 0              (fully dispensed, post-init home)
 
-Each move is verified by polling `?` until the reported plunger position
-equals the target (per LearnedPatterns E5 — Q.busy is unreliable on
-firmware 8.33). Wall-clock elapsed time is recorded per move.
+Each move's reported step position is compared to the expected step
+position derived from the same volume → step conversion the driver uses
+internally (round(uL / syringe_uL * full_stroke)). A mismatch flags a
+rounding-boundary or polling-termination issue.
 
-**Safety**: the syringe must be empty and the valve must NOT be in bypass.
-After `initialize()` the valve sits at the default input port; moving the
-plunger draws/expels air through that port. Do not run with fluid lines
+Wall-clock elapsed time is recorded per move. The valve must NOT be in
+bypass; after initialize() it sits at the default input port, so plunger
+motion draws/expels air through that port. Do not run with fluid lines
 under pressure.
 
 Usage:
@@ -101,12 +102,15 @@ def main(argv: list[str] | None = None) -> int:
         step_mode=SyringePumpController.StepMode.NORMAL,
         reply_timeout_s=args.reply_timeout_s,
     )
-    stroke = cfg.step_mode.full_stroke_steps
-    targets = [
-        ("max", stroke),
-        ("mid", stroke // 2),
-        ("min", 0),
+    full_stroke = cfg.step_mode.full_stroke_steps
+    targets: list[tuple[str, float]] = [
+        ("max", float(cfg.syringe_uL)),
+        ("mid", cfg.syringe_uL / 2),
+        ("min", 0.0),
     ]
+
+    def expected_steps(target_uL: float) -> int:
+        return round(target_uL / cfg.syringe_uL * full_stroke)
 
     with SyringePumpController.open(cfg) as pump:
         report = pump.diagnose()
@@ -135,21 +139,24 @@ def main(argv: list[str] | None = None) -> int:
         mismatches = 0
         total = args.cycles * len(targets)
         for cycle in range(args.cycles):
-            for label, target_steps in targets:
+            for label, target_uL in targets:
                 t0 = time.monotonic()
-                pump.move_to_steps(
-                    target_steps,
-                    settle_timeout_s=args.settle_timeout_s,
-                )
+                if label == "min":
+                    pump.dispense_uL(settle_timeout_s=args.settle_timeout_s)
+                else:
+                    pump.aspirate_uL(
+                        target_uL, settle_timeout_s=args.settle_timeout_s
+                    )
                 elapsed_ms = (time.monotonic() - t0) * 1000.0
                 pos = pump.query_plunger_position()
-                ok = pos == target_steps
+                want = expected_steps(target_uL)
+                ok = pos == want
                 mismatches += int(not ok)
                 status = "OK" if ok else "MISMATCH"
                 print(
                     f"cycle {cycle:>2} → {label:>3} "
-                    f"(target={target_steps:>5})  ?={pos:>5}  "
-                    f"{elapsed_ms:7.1f} ms  {status}"
+                    f"({target_uL:>6.1f} µL, want={want:>5} steps)  "
+                    f"?={pos:>5}  {elapsed_ms:7.1f} ms  {status}"
                 )
                 time.sleep(args.delay_s)
 

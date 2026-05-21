@@ -1,11 +1,12 @@
 """Defensive test guarding the milestone boundary (LearnedPatterns W4).
 
-Plunger initialization (``initialize``) and absolute step-based motion
-(``move_to_steps``) have shipped. Stall-current commissioning
-(``set_stall_current_for_syringe``), volume-based aspirate/dispense,
-abort, and step-mode reconfiguration are intentionally absent — if a
-future commit accidentally adds one before its HIL plan is ready, this
-test fails loudly rather than letting a half-finished method ship.
+Plunger initialization (``initialize``), absolute step-based motion
+(``move_to_steps``), and µL-volume wrappers (``aspirate_uL`` /
+``dispense_uL``) have shipped. Stall-current commissioning
+(``set_stall_current_for_syringe``), ``abort``, and step-mode
+reconfiguration are intentionally absent — if a future commit
+accidentally adds one before its HIL plan is ready, this test fails
+loudly rather than letting a half-finished method ship.
 """
 
 from __future__ import annotations
@@ -19,8 +20,6 @@ class TestNoPlungerMotionExposed:
     @pytest.mark.parametrize(
         "attr",
         [
-            "aspirate_uL",
-            "dispense_uL",
             "abort",
             "set_step_mode",
             "set_stall_current_for_syringe",
@@ -53,15 +52,17 @@ class TestValveMotionPresent:
         )
 
 
-class TestPlungerInitPresent:
-    """Positive guard: the plunger-init + step-move surface this
-    milestone ships must be present."""
+class TestPlungerMotionPresent:
+    """Positive guard: the plunger-init + step-move + volume-move surface
+    this milestone ships must be present."""
 
     @pytest.mark.parametrize(
         "attr",
         [
             "initialize",
             "move_to_steps",
+            "aspirate_uL",
+            "dispense_uL",
         ],
     )
     def test_attr_present(self, attr: str) -> None:

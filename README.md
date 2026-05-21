@@ -12,8 +12,9 @@ Pre-alpha (`0.2.0.dev0`). The following surfaces are shipped and HIL-verified on
 - **Valve motion** — `initialize_valve`, `set_valve_position`, `move_valve_to_port`.
 - **Plunger initialization** — `initialize` (`Z<force>R` / `Y<force>R`, polls `?6 != "?"` for completion). Stall current (`U200,n`) must be set out-of-band before connecting this driver — see [CLAUDE.md](CLAUDE.md) "Stall current" section.
 - **Plunger absolute moves** — `move_to_steps` (`A<n>R`, polls `?` until target).
+- **Plunger volume moves** — `aspirate_uL(target_uL)` / `dispense_uL(target_uL=0)` — absolute contained-volume targets converted via `Config.syringe_uL` and `Config.step_mode.full_stroke_steps`; thin wrappers over `move_to_steps`.
 
-Volume-based aspirate / dispense, `abort` + `requires_reinit` latch, and `set_step_mode` remain intentionally absent (tracked in [#3](https://github.com/coport-uni/SyringePumpController/issues/3)). The test suite pins this boundary via `TestNoPlungerMotionExposed` / `TestPlungerInitPresent` in [tests/test_plunger_motion_absent.py](tests/test_plunger_motion_absent.py).
+`abort` + `requires_reinit` latch and `set_step_mode` remain intentionally absent. The test suite pins this boundary via `TestNoPlungerMotionExposed` / `TestPlungerMotionPresent` in [tests/test_plunger_motion_absent.py](tests/test_plunger_motion_absent.py).
 
 ## If you've never used a syringe pump before
 
@@ -170,7 +171,7 @@ with SyringePumpController.open(cfg) as pump:
     print(report.render())
 ```
 
-[main.py](main.py) is an end-to-end tutorial that exercises every shipped public method on real hardware (diagnose → identity queries → `initialize` → `move_to_steps` max/mid/min → `move_valve_to_port` 1↔3↔1). Narrower per-feature bench scripts live in [claude_test/](claude_test/) (see [Bench scripts](#bench-scripts)).
+[main.py](main.py) is an end-to-end tutorial that exercises every shipped public method on real hardware (diagnose → identity queries → `initialize` → `aspirate_uL`/`dispense_uL` max/mid/min → `move_valve_to_port` 1↔3↔1). Narrower per-feature bench scripts live in [claude_test/](claude_test/) (see [Bench scripts](#bench-scripts)).
 
 ## When diagnose fails
 
@@ -207,14 +208,17 @@ Everything is reachable from a single import: `from sy01b import SyringePumpCont
 - `initialize(*, force, ccw, settle_timeout_s)` — `Z<force>R` / `Y<force>R`, polls `?6` until non-`?` (LearnedPatterns E7). Stall current must already be set in EEPROM for the installed syringe — see [CLAUDE.md](CLAUDE.md) "Stall current" section.
 - `move_to_steps(steps, *, settle_timeout_s, poll_interval_s)` — `A<n>R`, polls `?` until target matches.
 
+**Plunger volume moves**
+- `aspirate_uL(target_uL, *, settle_timeout_s, poll_interval_s)` — absolute "fill to `target_uL` µL"; converts via `round(target_uL / Config.syringe_uL * full_stroke_steps)` and delegates to `move_to_steps`.
+- `dispense_uL(target_uL=0, *, settle_timeout_s, poll_interval_s)` — same conversion + delegation, named for the emptying direction; default `0` is the common "fully dispense" case.
+
 **Other**
 - `wait_until_ready()` — `Q`-polling with backoff. Retained for parity with the manual; unreliable on firmware 8.33 (LearnedPatterns E5).
 
 ## What's not yet implemented
 
-The remaining plunger-side surface. See [#3](https://github.com/coport-uni/SyringePumpController/issues/3) and [ToDo.md §6 / §16](ToDo.md):
+The remaining plunger-side surface (see [ToDo.md §6](ToDo.md)):
 
-- `aspirate_uL(uL)` / `dispense_uL(uL)` — volume↔step conversion driven by `Config`.
 - `abort()` — `TR` plus the `requires_reinit` latch (errors 1 and 9 also set it).
 - `set_step_mode(mode)` — `N0`/`N1`/`N2` configuration.
 - `raw(cmds)` — escape hatch for commands not modelled above.
@@ -228,7 +232,7 @@ Read-only HIL identity probes (`claude_test/hil_smoke.md`, `hil_identity.py`) ar
 | Script | Purpose |
 |---|---|
 | [valve_toggle.py](claude_test/valve_toggle.py) | Toggle a distribution valve between two ports (default 1 ↔ 3) and verify each move via `?6`. Plunger never moves. |
-| [plunger_cycle.py](claude_test/plunger_cycle.py) | After init, cycle the plunger through max → mid → min absolute positions for N cycles, verifying each move. |
+| [plunger_cycle.py](claude_test/plunger_cycle.py) | After init, cycle the plunger through max → mid → min absolute contained volumes via `aspirate_uL`/`dispense_uL` for N cycles, verifying each move against the converted step count. |
 
 ## Develop
 

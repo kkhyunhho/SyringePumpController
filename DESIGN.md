@@ -110,24 +110,26 @@ Command *builders* live here as thin string helpers (`abs_move(n) -> "A{n}"`, `v
 ## 6. Pump (high-level API)
 
 ```python
-from sy01b import Pump, PumpConfig, StepMode
+from sy01b import SyringePumpController
 
-cfg = PumpConfig(port="/dev/ttyUSB0", address=1, syringe_uL=5000, step_mode=StepMode.NORMAL)
-with Pump.open(cfg) as pump:
-    pump.initialize()                     # /1ZR  + wait until ready
-    pump.aspirate_uL(2500)                # I, A<steps>, R  (computed from syringe size + step mode)
-    pump.dispense_uL(2500)                # O, A0,        R
+cfg = SyringePumpController.Config(
+    port="/dev/ttyUSB1", address=1, syringe_uL=125,
+    step_mode=SyringePumpController.StepMode.NORMAL,
+)
+with SyringePumpController.open(cfg) as pump:
+    pump.initialize(force=2)              # /1Z2R, polls ?6 until non-?
+    pump.aspirate_uL(62.5)                # → A<round(62.5/125*12000)>R = A6000R
+    pump.dispense_uL()                    # → A0R  (default target=0)
 ```
 
 Design points:
 
-1. **Volume ↔ step conversion** lives in the Pump, not the protocol layer, because it depends on syringe size and step mode held in `PumpConfig`. Step counts are exposed via `move_to_steps()` for callers that need raw control.
-2. **Busy polling** is centralized in one private method, `_wait_until_ready(deadline)`. It sends `Q`, parses the busy bit, sleeps with an exponential backoff capped at ~100 ms, and raises on deadline or error status. The manual is unambiguous: `Q` is the only reliable way to read busy/ready, so no other call path is allowed to make that decision.
-3. **Error handling.** After `_wait_until_ready` reads the final status, it converts non-zero error codes to typed exceptions. Two error codes carry a recovery obligation that the Pump enforces:
-   - Error 1 (init failed) and error 9 (plunger overload) flip an internal `requires_reinit` flag. Subsequent move calls raise `RequiresReinitError` until `initialize()` succeeds.
-   - Error 11 (move in bypass) does *not* set the flag; the caller can recover by moving the valve.
-4. **`Pump.open()` is a context manager.** `__exit__` closes the serial handle and does *not* send `T` — terminating an active plunger move requires re-initialization per the manual, and silent re-init on cleanup would hide bugs. Aborts are an explicit `pump.abort()` call.
-5. **No reconnect logic.** If the serial handle drops, the Pump is dead and the caller restarts. Hot-replug while powered is forbidden by the hardware anyway.
+1. **Volume ↔ step conversion** lives in the controller, not the protocol layer, because it depends on syringe size and step mode held in `Config`. Conversion is `round(target_uL / Config.syringe_uL * full_stroke_steps)`. Raw step counts remain available via `move_to_steps()` for callers that need the half-step grid directly.
+2. **Absolute semantics for both wrappers.** `aspirate_uL(V)` and `dispense_uL(V)` both target an absolute *contained* volume `V` µL — the pump's `A<n>` is itself absolute, so the same conversion drives both methods and a current-position query is never required before the move. The split name only signals the caller's intent (fill vs. drain) at the call site; the wire frame for a given `V` is identical regardless of which wrapper is invoked.
+3. **Busy polling.** Originally this design called for a centralized `_wait_until_ready(Q)` helper. HIL surfaced that `Q.busy` is unreliable on firmware 8.33 (LearnedPatterns E5) — the bit latches True after the first valve home and never clears. The shipped driver instead polls position queries: `?` for plunger moves (`move_to_steps` / `aspirate_uL` / `dispense_uL`), `?6` for valve moves (`initialize_valve`, `move_valve_to_port`) and for `initialize` completion (E7). `wait_until_ready()` is retained for parity with the manual but flagged unreliable in its docstring.
+4. **Error handling.** Status bytes on every reply are decoded into `StatusByte(busy, error)`; non-zero error codes are mapped to typed exceptions (`InitFailedError`, `NotInitializedError`, `PlungerOverloadError`, `PlungerBlockedByBypassError`, …). The forward-looking `requires_reinit` latch — flipped on errors 1 and 9, blocking further moves until `initialize()` re-succeeds — is **not yet implemented**; tracked alongside `abort` in [ToDo.md §6](ToDo.md).
+5. **`SyringePumpController.open()` is a context manager.** `__exit__` closes the serial handle and does *not* send `T` — terminating an active plunger move requires re-initialization per the manual, and silent re-init on cleanup would hide bugs. Explicit `abort` remains deferred.
+6. **No reconnect logic.** If the serial handle drops, the controller is dead and the caller restarts. Hot-replug while powered is forbidden by the hardware anyway.
 
 ## 7. Diagnostic / commissioning flow
 

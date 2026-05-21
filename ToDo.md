@@ -142,7 +142,8 @@ First plunger-motion API. Lands the canonical `/1ZR` init path designed in [DESI
 - [x] Append [claude_test/README.md](claude_test/README.md) index rows for `syringe_init.py` and `plunger_cycle.py`, including HIL findings.
 - [x] HIL run produced real timings/observations → appended E7 (Z completion signal) and E8 (post-init V=4000 pps default) to [LearnedPatterns.md](LearnedPatterns.md) in CommonClaude §10 form.
 - [x] Tick §6 lines for `initialize(...)` and `set_stall_current_for_syringe()`.
-- [ ] Remaining §6 plunger-side: `aspirate_uL` / `dispense_uL` (volume↔step conversion), `abort` + `requires_reinit` latch, `set_step_mode`, `raw(cmds)`. Defer to next milestone.
+- [x] §6 plunger-side `aspirate_uL` / `dispense_uL` (volume↔step conversion) — shipped in §19.
+- [ ] Remaining §6 plunger-side: `abort` + `requires_reinit` latch, `set_step_mode`, `raw(cmds)`. Defer.
 
 ## 17. Stall-current removal (2026-05-18)
 
@@ -240,4 +241,81 @@ Out-of-scope (deliberate):
 - `Concept.md` and `CLAUDECowork.md` are not mirrored (meta /
   other-workspace).
 - `pre-commit` (§16) tooling is documented but not installed — track
-  as a future §19 candidate.
+  as a future candidate (renumbered after §19 ships).
+
+## 19. µL volume API (2026-05-21, #7)
+
+Add `aspirate_uL` / `dispense_uL` as the user-facing plunger motion API,
+on top of the existing step-based `move_to_steps`. Both methods take an
+**absolute** contained-volume target in µL and convert to a half-step
+position via `round(target_uL / Config.syringe_uL * full_stroke_steps)`,
+then delegate to `move_to_steps` so the polling / timeout / error path
+stays single-sourced. Lifts the `aspirate_uL` / `dispense_uL` pin from
+`TestNoPlungerMotionExposed` (LearnedPatterns W4 — the symbols were
+pre-reserved precisely so this milestone could flip them in one commit).
+Also flips `Config.syringe_uL` default `5000` → `125` µL to match the
+fixed bench syringe (the only physical syringe ever attached). Tracked
+in [#7](https://github.com/coport-uni/SyringePumpController/issues/7).
+
+- [x] Add `_uL_to_steps(volume_uL)` private helper in
+  [src/sy01b/syringe_pump_controller.py](src/sy01b/syringe_pump_controller.py)
+  — range-validates against `Config.syringe_uL` (raises `ValueError`
+  before any I/O), converts via `round(volume_uL / syringe * full_stroke)`.
+- [x] Add `aspirate_uL(target_uL, *, settle_timeout_s, poll_interval_s)`
+  and `dispense_uL(target_uL=0, *, settle_timeout_s, poll_interval_s)`
+  as thin wrappers — both call `move_to_steps(_uL_to_steps(target_uL))`.
+- [x] Flip `Config.syringe_uL` default `5000` → `125`; update
+  [tests/test_config.py](tests/test_config.py)
+  `test_defaults_accepted` accordingly.
+- [x] Extend [pyproject.toml](pyproject.toml) ruff ignore with
+  `N802` / `N803` / `N806` (same `µL`-suffix justification as the
+  existing `N815`) so `aspirate_uL` / `_uL_to_steps` / `target_uL` pass.
+- [x] Update [tests/test_plunger_motion_absent.py](tests/test_plunger_motion_absent.py):
+  remove `aspirate_uL` / `dispense_uL` from `TestNoPlungerMotionExposed`;
+  rename `TestPlungerInitPresent` → `TestPlungerMotionPresent` and add
+  the two new methods to its present-list.
+- [x] Add `TestVolumeToStepsConversion` (parametrized — exact-divide,
+  N0/N1 modes, rounding boundary at 0.1 µL on 125 µL syringe, range
+  validation) and `TestVolumeAPIDelegation` (delegates with converted
+  steps, default `target_uL=0` on dispense, raises before any I/O
+  via a `_NeverUsedTransport` stub) to
+  [tests/test_config.py](tests/test_config.py).
+- [x] Rewrite [main.py](main.py) section 4 — drive via `aspirate_uL` /
+  `dispense_uL` keyed off `cfg.syringe_uL`; use `dispense_uL()` for the
+  fully-empty step.
+- [x] Rewrite [claude_test/plunger_cycle.py](claude_test/plunger_cycle.py)
+  to compute targets in µL and verify each move against the same
+  `round(uL / syringe_uL * full_stroke)` expectation the driver uses.
+- [x] Refresh [DESIGN.md §6](DESIGN.md) — example uses 125 µL syringe;
+  add "Absolute semantics" design point; reconcile points 3–6 with the
+  shipped `?`/`?6` polling (the planned `_wait_until_ready(Q)` never
+  shipped per LearnedPatterns E5).
+- [x] Update [README.md](README.md) — public-API surface adds the two
+  wrappers; "What's not yet implemented" trimmed to `abort`,
+  `set_step_mode`, `raw(cmds)`.
+- [x] Update [claude_test/README.md](claude_test/README.md) row for
+  `plunger_cycle.py` to describe the new µL interface; HIL marked
+  "rerun pending".
+- [x] Append commit-boundary bullet to
+  [CLAUDE.md](CLAUDE.md) "Commit boundaries seen so far"; refresh the
+  pinned-absent list in the repo-status paragraph.
+- [ ] HIL on `/dev/ttyUSB1` (125 µL syringe, empty, force=2): run
+  `claude_test/plunger_cycle.py --cycles 3` and `main.py`; confirm
+  reported `?` after each `aspirate_uL` / `dispense_uL` matches
+  `round(uL / 125 * 12 000)` across every cycle. A mismatch on the
+  rounding boundary (62.5 µL → 6 000 steps) is the watch-item.
+- [ ] If HIL surfaces a non-obvious behaviour (rounding drift,
+  polling-termination edge), append a Problem / Cause / Fix / Rule
+  entry to [LearnedPatterns.md](LearnedPatterns.md). Don't pre-write.
+- [ ] Single Conventional Commits commit per CommonClaude §11 closing
+  #7; `gh pr create` per CommonClaude §15.2 template.
+
+Memory: `project-syringe-default` saved so future demos default to
+125 µL unless arithmetic clarity calls for another size.
+
+Out-of-scope (deliberately deferred — remain pinned-absent in
+`TestNoPlungerMotionExposed`):
+
+- `abort` + `requires_reinit` latch
+- `set_step_mode`
+- `raw(cmds)` escape hatch
