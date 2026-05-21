@@ -3,12 +3,14 @@
 LVGL touch client that drives the SY-01B syringe pump over WiFi via
 the [server/](../server/) FastAPI bridge.
 
-**Phase B (this folder ships):** boot, WiFi STA, `/v1/diagnose` once at
-startup, `/v1/status` every 2 s, status-only LCD dashboard. Motion
-endpoints are intentionally not called yet.
-
-**Phase C (planned, [ToDo §22](../ToDo.md)):** Valve / Move / Prime
-tabs, error-recovery modals, full FSM transitions.
+**Phase C (this folder ships):** full motion UI. Boot → WiFi →
+diagnose → user-driven Initialize → READY ⇄ BUSY. Valve tab, Move
+tab (slider 0–125 µL + Aspirate / Dispense), Prime tab (port 3 →
+port 1, one cycle), Status tab (2 s refresh). Error modals
+(recoverable: Retry / Dismiss; fatal: Re-initialize) with
+`requires_reinit` latch on `PlungerOverloadError` /
+`InitFailedError`. Single-in-flight `pump_task` consumes a
+4-deep command queue from the LVGL thread.
 
 ## Hardware
 
@@ -45,26 +47,43 @@ First build pulls managed components and writes `dependencies.lock`;
 commit that file in a follow-up once the build is reproducible on the
 bench machine.
 
-## Runtime behaviour (Phase B)
+## Runtime behaviour
 
-1. `app_main` initialises NVS, the BSP (I²C + display), and the FSM.
-2. The UI is created with the four tabs — Valve / Move / Prime show
-   "Phase C (not yet wired)" placeholders; Status is empty until
-   diagnose finishes.
-3. WiFi STA connects using the credentials from menuconfig (or NVS
-   override). Initial state transitions: `BOOT → WIFI_CONNECTING →
+1. `app_main` initialises NVS, the BSP (I²C + display + buttons),
+   the FSM, and creates the LVGL UI (all four tabs live).
+2. WiFi STA connects using the credentials from menuconfig (or NVS
+   override). State transitions: `BOOT → WIFI_CONNECTING →
    DIAGNOSING`.
-4. The firmware issues a single `GET /v1/diagnose` to the configured
-   server URL. On success, state advances to `NEEDS_INIT` and the
-   Status tab is seeded with the diagnose payload.
-5. A background `status_task` polls `GET /v1/status` every 2 s and
-   refreshes the LVGL table on the main thread via `lv_async_call`.
-6. On WiFi disconnect, the banner switches to red ("WiFi lost —
-   reconnecting") and the status poll pauses until the link returns.
-
-Phase B never calls `POST /v1/initialize` / `/valve` / `/aspirate`
-/ `/dispense` / `/move_steps` / `/prime`. The Valve / Move / Prime
-tabs are placeholders. Phase C closes [#12](https://github.com/coport-uni/SyringePumpController/issues/12) and opens the motion UI.
+3. The firmware issues a single `GET /v1/diagnose`. On success,
+   state advances to `NEEDS_INIT` (amber banner) and the Status
+   tab is seeded with the diagnose payload. **The Initialize step
+   does not auto-run** — preserves the diagnose-before-init
+   discipline (root DESIGN.md §12 Q4).
+4. The operator taps the **right BSP button** (or, when wired,
+   the on-screen Initialize control) to send `POST /v1/initialize`.
+   On success, state advances to `READY` (green banner) and motion
+   controls become enabled.
+5. UI taps enqueue a `pump_cmd_t` onto a 4-deep FreeRTOS queue.
+   The dedicated `pump_task` pops one command at a time, calls the
+   matching `pump_client` HTTP wrapper synchronously, and posts
+   results back to LVGL via `lv_async_call`. State cycles
+   `READY ⇄ BUSY` per command.
+6. A separate `status_task` polls `GET /v1/status` every 2 s; the
+   Status tab and the cached valve-highlight / current-volume
+   labels refresh automatically.
+7. **BSP buttons:** left = jump to Status tab; right = Initialize
+   (only active in `NEEDS_INIT`).
+8. **Error modals.** Recoverable errors (HTTP 4xx, `ValveOverloadError`,
+   `TransportTimeout`, etc.) show a *Retry / Dismiss* modal —
+   `ValveOverloadError` is auto-retried once because the server
+   re-homes on the next valve command (CLAUDE.md "Error model"
+   code 10). Fatal errors (`PlungerOverloadError` code 9,
+   `InitFailedError` code 1) latch `requires_reinit`, switch to
+   the *Fatal* state (dark red banner), and the only modal button
+   is *Re-initialize* → drops back to `NEEDS_INIT`.
+9. On WiFi disconnect the banner turns red ("WiFi lost — reconnecting")
+   and the status poll pauses; commands queued during the outage
+   still execute when the link returns (one in flight at a time).
 
 ## Static analysis
 
@@ -89,12 +108,13 @@ firmware/
     ├── CMakeLists.txt
     ├── Kconfig.projbuild       # menuconfig "Syringe Pump Client"
     ├── idf_component.yml       # esp-box-3 ^4.0
-    ├── main.c                  # app_main + status_task
+    ├── main.c                  # app_main + pump_task + status_task + BSP btns
     ├── wifi.{c,h}              # STA + auto-reconnect, posts FSM events
     ├── config_store.{c,h}      # NVS read of Kconfig-default overrides
-    ├── pump_client.{c,h}       # diagnose + status only (Phase B)
-    ├── state.{c,h}             # FSM, mutex-protected status snapshot
-    └── ui.{c,h}                # 4-tab LVGL tabview (Status live only)
+    ├── pump_client.{c,h}       # /v1/* HTTP wrappers (Phase C: full motion)
+    ├── pump_task.h             # pump_cmd_t + queue interface (UI ↔ pump_task)
+    ├── state.{c,h}             # FSM + cached status snapshot + requires_reinit
+    └── ui.{c,h}                # LVGL tabview, modals, motion-enabled gating
 ```
 
 ## Architecture link

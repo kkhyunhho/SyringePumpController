@@ -102,13 +102,52 @@ void state_set_needs_init(const char *software_version, float supply_volts)
              supply_volts);
 }
 
-void state_set_error(const char *msg)
+void state_set_ready(void)
+{
+    lock();
+    s_state = APP_STATE_READY;
+    s_status.busy = false;
+    s_status.error_msg[0] = '\0';
+    s_status.requires_reinit = false;
+    s_status.last_error_name[0] = '\0';
+    s_status.last_error_message[0] = '\0';
+    s_status.last_error_code = 0;
+    unlock();
+    ESP_LOGI(TAG, "ready");
+}
+
+void state_set_busy(void)
+{
+    lock();
+    s_state = APP_STATE_BUSY;
+    s_status.busy = true;
+    unlock();
+}
+
+void state_set_error_recoverable(const char *msg)
 {
     lock();
     s_state = APP_STATE_ERROR_RECOVERABLE;
+    s_status.busy = false;
     copy_str(s_status.error_msg, sizeof(s_status.error_msg), msg);
     unlock();
-    ESP_LOGE(TAG, "error: %s", msg);
+    ESP_LOGW(TAG, "recoverable error: %s", msg);
+}
+
+void state_set_error_fatal(const char *msg)
+{
+    lock();
+    s_state = APP_STATE_ERROR_FATAL;
+    s_status.busy = false;
+    s_status.requires_reinit = true;
+    copy_str(s_status.error_msg, sizeof(s_status.error_msg), msg);
+    unlock();
+    ESP_LOGE(TAG, "fatal error (requires re-init): %s", msg);
+}
+
+void state_set_error(const char *msg)
+{
+    state_set_error_recoverable(msg);
 }
 
 void state_update_status(const char *valve, int plunger_steps, bool pump_busy,
@@ -122,4 +161,41 @@ void state_update_status(const char *valve, int plunger_steps, bool pump_busy,
              error_name);
     s_status.pump_error_code = error_code;
     unlock();
+}
+
+void state_record_pump_error(const pump_error_t *err)
+{
+    if (err == NULL) {
+        return;
+    }
+    lock();
+    copy_str(s_status.last_error_name, sizeof(s_status.last_error_name),
+             err->error_name);
+    copy_str(s_status.last_error_message, sizeof(s_status.last_error_message),
+             err->message);
+    s_status.last_error_code = err->code;
+    s_status.busy = false;
+    if (err->klass == PUMP_ERROR_FATAL) {
+        s_state = APP_STATE_ERROR_FATAL;
+        s_status.requires_reinit = true;
+    } else {
+        s_state = APP_STATE_ERROR_RECOVERABLE;
+    }
+    copy_str(s_status.error_msg, sizeof(s_status.error_msg), err->message);
+    unlock();
+    if (err->klass == PUMP_ERROR_FATAL) {
+        ESP_LOGE(TAG, "fatal pump error: %s (code %d)", err->error_name,
+                 err->code);
+    } else {
+        ESP_LOGW(TAG, "recoverable pump error: %s (code %d)", err->error_name,
+                 err->code);
+    }
+}
+
+bool state_requires_reinit(void)
+{
+    lock();
+    bool r = s_status.requires_reinit;
+    unlock();
+    return r;
 }

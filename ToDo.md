@@ -452,10 +452,78 @@ Stacked on top of [#10](https://github.com/coport-uni/SyringePumpController/issu
 - [ ] Single Conventional Commits commit closing #12; `gh pr create`
   per CommonClaude §15.2 template. PR depends on #11 merging first.
 
-## 22. ESP32-S3 firmware — motion UI (planned)
+## 22. ESP32-S3 firmware — motion UI (2026-05-21, #15)
 
-Phase C, planned. Wires `pump_initialize`, `pump_valve`,
-`pump_aspirate`, `pump_dispense`, `pump_move_steps`, `pump_prime`
-HTTP wrappers; fills the Valve / Move / Prime tabs; adds
-`READY` / `BUSY` / `ERROR_*` FSM transitions; error-recovery
-modals. Issue not opened yet — open it when Phase B HIL passes.
+Phase C of the ESP32 controller initiative. Stacks on top of Phase B
+(closed by [#14](https://github.com/coport-uni/SyringePumpController/pull/14)). Wires the motion endpoints, fills the Valve /
+Move / Prime tabs, adds the BUSY / ERROR FSM transitions and error
+modals, and exposes the front BSP buttons. Tracked in
+[#15](https://github.com/coport-uni/SyringePumpController/issues/15).
+
+- [ ] Extend `firmware/main/pump_client.{c,h}` with six new
+  synchronous HTTP wrappers: `pump_initialize(force, ccw)`,
+  `pump_valve(port, ccw)`, `pump_aspirate(target_uL)`,
+  `pump_dispense(target_uL)`, `pump_move_steps(steps)`,
+  `pump_prime(cycles, source_port, sink_port)`. Each builds a JSON
+  body via cJSON, POSTs to the matching `/v1/...` endpoint, and
+  parses the success-payload struct.
+- [ ] Add `pump_error_t` (`error_name`, `code`, `command`,
+  `raw_reply_hex`, `message`) and a `pump_error_class_t`
+  enum (`PUMP_ERROR_NONE`, `_RECOVERABLE`, `_FATAL`) classifying
+  HTTP 4xx / 5xx responses. Fatal: `PlungerOverloadError` (code 9),
+  `InitFailedError` (code 1). Recoverable: `ValveOverloadError`,
+  `TransportTimeout`, `ProtocolError`, transport 5xx.
+- [ ] Extend `state.{c,h}`: new states `APP_STATE_READY`,
+  `APP_STATE_BUSY`, `APP_STATE_ERROR_FATAL`; `requires_reinit`
+  latch in `app_status_t` (set on fatal, cleared by successful
+  re-init). New helpers: `state_set_ready()`, `state_set_busy()`,
+  `state_set_error_fatal(msg)`, `state_record_pump_error(err)`.
+- [ ] Build a new FreeRTOS task `pump_task` (8 KB stack, prio 5,
+  core 0) in `main.c` that owns a `QueueHandle_t pump_queue` of
+  depth 4. UI callbacks `xQueueSend` a tagged-union `pump_cmd_t`;
+  the task pops, calls the matching pump_client wrapper, and
+  posts the result back to LVGL via `lv_async_call`. **Never**
+  call HTTP from the LVGL thread.
+- [ ] Wire BSP front buttons (`BSP_BUTTON_LEFT`,
+  `BSP_BUTTON_RIGHT`): left = jump to Status tab; right =
+  Initialize (active only when `state_get() == APP_STATE_NEEDS_INIT`).
+- [ ] Implement the Valve tab in `ui.{c,h}`: 2×2 grid of
+  `lv_btn`s for Ports 1–4; active port styled blue, others gray.
+  Tap → `pump_cmd_t{ .kind = VALVE, .valve_port = N }`. Snap-back
+  on `pump_status_t.valve` response.
+- [ ] Implement the Move tab: `lv_slider` 0–125 µL (step 1) with
+  live label; two large buttons "Aspirate to" / "Dispense to"
+  enqueue `ASPIRATE` / `DISPENSE` with the slider's `target_uL`.
+  A "Current" label echoes the cached `plunger_steps` converted
+  back to µL.
+- [ ] Implement the Prime tab: large "PRIME (port 3 → port 1)"
+  button → `lv_msgbox` confirmation → enqueue `PRIME { cycles = 1,
+  source = 3, sink = 1 }`. Button replaced by `lv_spinner` plus
+  progress label while `BUSY`.
+- [ ] Disable all motion controls (`LV_STATE_DISABLED`) when state
+  ≠ `READY`. Add `ui_apply_motion_enabled(bool)` helper called
+  from `apply_ui_state` in `main.c`.
+- [ ] Error modal (`lv_msgbox`):
+  - Recoverable: "Retry" / "Dismiss".
+  - Fatal: "Re-initialize" only — drops back to `NEEDS_INIT` and
+    auto-resets `requires_reinit` on next init success.
+  - Auto-retry once on `ValveOverloadError` (server re-homes the
+    valve on the next valve command per CLAUDE.md "Error model").
+- [ ] Update `firmware/README.md` runtime section: 5-tab listing
+  becomes "all four tabs live", document the new BSP-button map,
+  add the HIL acceptance checklist.
+- [ ] Append commit-boundary bullet to [CLAUDE.md](CLAUDE.md);
+  refresh the repo-status paragraph to note motion UI is live.
+- [ ] `clang-format --dry-run --Werror firmware/main/*.{c,h}` clean.
+- [ ] `cppcheck --enable=warning,style firmware/main/` clean.
+- [ ] HIL (user-driven flash; "ESP에 플래시는 내가 진행할께"):
+  full sequence — boot → WiFi → diagnose → Initialize (right BSP
+  button) → Valve→3 → Aspirate→125 µL → Valve→1 → Dispense→0 →
+  Prime 1 cycle. Then trigger a fault (block plunger, lid open,
+  whichever) → `PlungerOverloadError` modal appears, `READY`
+  blocked until re-init.
+- [ ] If HIL surfaces non-obvious behaviour (LVGL thread races,
+  modal stacking, BSP button debounce), append a Problem / Cause /
+  Fix / Rule entry to [LearnedPatterns.md](LearnedPatterns.md).
+- [ ] Single Conventional Commits commit closing #15;
+  `gh pr create --base main` (no stacking after the §21 sting).

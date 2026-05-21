@@ -16,6 +16,7 @@ static const char *TAG = "pump_client";
 #define MAX_URL_LEN  192
 #define MAX_RESP_LEN 2048
 #define MAX_PATH_LEN 32
+#define MAX_BODY_LEN 192
 
 static char s_base_url[MAX_URL_LEN];
 
@@ -31,15 +32,24 @@ esp_err_t pump_client_init(void)
 }
 
 /**
- * Issue a single HTTP request and read up to ``out_cap - 1`` bytes
- * of the response into ``out`` (null-terminated). ``method`` is one
- * of HTTP_METHOD_GET or HTTP_METHOD_POST; ``body`` may be NULL for
- * GET requests. Returns ESP_OK on HTTP 2xx, ESP_FAIL on non-2xx,
- * or the underlying transport ``esp_err_t``.
+ * Issue a single HTTP request and read up to ``out_cap - 1`` bytes of
+ * the response into ``out`` (null-terminated). ``method`` is one of
+ * ``HTTP_METHOD_GET`` or ``HTTP_METHOD_POST``; ``body`` may be NULL
+ * for GET requests. If ``status_out`` is non-NULL, it receives the
+ * HTTP status code regardless of success/failure.
+ *
+ * Returns ``ESP_OK`` on HTTP 2xx, ``ESP_FAIL`` on non-2xx (body still
+ * populated so the caller can parse an error envelope), or the
+ * underlying transport ``esp_err_t``.
  */
 static esp_err_t http_perform(esp_http_client_method_t method, const char *path,
-                              const char *body, char *out, size_t out_cap)
+                              const char *body, char *out, size_t out_cap,
+                              int *status_out)
 {
+    if (status_out != NULL) {
+        *status_out = 0;
+    }
+
     char url[MAX_URL_LEN + MAX_PATH_LEN];
     snprintf(url, sizeof(url), "%s%s", s_base_url, path);
 
@@ -78,6 +88,9 @@ static esp_err_t http_perform(esp_http_client_method_t method, const char *path,
     int headers = esp_http_client_fetch_headers(client);
     (void)headers;
     int status = esp_http_client_get_status_code(client);
+    if (status_out != NULL) {
+        *status_out = status;
+    }
 
     int total = 0;
     while (total < (int)(out_cap - 1)) {
@@ -142,14 +155,66 @@ static bool json_bool(cJSON *parent, const char *field, bool def)
     return def;
 }
 
+/**
+ * Classify a server-side error class name. Fatal = "must re-init"
+ * per CLAUDE.md "Error model". Mirror of the server-side mapping in
+ * server/errors.py.
+ */
+static pump_error_class_t classify_error(const char *name, int code)
+{
+    (void)code;
+    if (name == NULL || name[0] == '\0') {
+        return PUMP_ERROR_RECOVERABLE;
+    }
+    if (strcmp(name, "PlungerOverloadError") == 0 ||
+        strcmp(name, "InitFailedError") == 0) {
+        return PUMP_ERROR_FATAL;
+    }
+    return PUMP_ERROR_RECOVERABLE;
+}
+
+/**
+ * Parse a server JSON error envelope `{error, code, command,
+ * raw_reply_hex, message}` from ``body`` into ``err``. Robust to
+ * non-JSON bodies (server outages, raw HTML 502s) — those fall back
+ * to a generic recoverable HttpError.
+ */
+static void parse_error_body(int http_status, const char *body,
+                             pump_error_t *err)
+{
+    if (err == NULL) {
+        return;
+    }
+    memset(err, 0, sizeof(*err));
+    err->http_status = http_status;
+    err->code = -1;
+    err->klass = PUMP_ERROR_RECOVERABLE;
+
+    cJSON *root = body != NULL ? cJSON_Parse(body) : NULL;
+    if (root == NULL) {
+        strncpy(err->error_name, "HttpError", sizeof(err->error_name) - 1);
+        snprintf(err->message, sizeof(err->message), "HTTP %d (no JSON body)",
+                 http_status);
+        return;
+    }
+
+    copy_json_str(root, "error", err->error_name, sizeof(err->error_name));
+    err->code = json_int(root, "code", -1);
+    copy_json_str(root, "command", err->command, sizeof(err->command));
+    copy_json_str(root, "message", err->message, sizeof(err->message));
+    err->klass = classify_error(err->error_name, err->code);
+
+    cJSON_Delete(root);
+}
+
 esp_err_t pump_diagnose(pump_diag_t *out)
 {
     if (out == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
     char resp[MAX_RESP_LEN];
-    esp_err_t err =
-        http_perform(HTTP_METHOD_GET, "/v1/diagnose", NULL, resp, sizeof(resp));
+    esp_err_t err = http_perform(HTTP_METHOD_GET, "/v1/diagnose", NULL, resp,
+                                 sizeof(resp), NULL);
     if (err != ESP_OK) {
         return err;
     }
@@ -183,8 +248,8 @@ esp_err_t pump_status(pump_status_t *out)
         return ESP_ERR_INVALID_ARG;
     }
     char resp[MAX_RESP_LEN];
-    esp_err_t err =
-        http_perform(HTTP_METHOD_GET, "/v1/status", NULL, resp, sizeof(resp));
+    esp_err_t err = http_perform(HTTP_METHOD_GET, "/v1/status", NULL, resp,
+                                 sizeof(resp), NULL);
     if (err != ESP_OK) {
         return err;
     }
@@ -203,4 +268,127 @@ esp_err_t pump_status(pump_status_t *out)
 
     cJSON_Delete(root);
     return ESP_OK;
+}
+
+/**
+ * Shared POST + motion-result-parse helper. ``body`` is the JSON
+ * request body. On HTTP 2xx, parses {valve, plunger_steps} into
+ * ``out``. On 4xx/5xx, fills ``err`` and returns ESP_FAIL.
+ */
+static esp_err_t post_motion(const char *path, const char *body,
+                             pump_motion_result_t *out, pump_error_t *err)
+{
+    char resp[MAX_RESP_LEN];
+    int status = 0;
+    esp_err_t rc =
+        http_perform(HTTP_METHOD_POST, path, body, resp, sizeof(resp), &status);
+    if (rc == ESP_OK) {
+        if (out != NULL) {
+            memset(out, 0, sizeof(*out));
+            cJSON *root = cJSON_Parse(resp);
+            if (root != NULL) {
+                copy_json_str(root, "valve", out->valve, sizeof(out->valve));
+                out->plunger_steps = json_int(root, "plunger_steps", 0);
+                cJSON_Delete(root);
+            }
+        }
+        return ESP_OK;
+    }
+    if (rc == ESP_FAIL) {
+        /* HTTP non-2xx — parse error envelope. */
+        parse_error_body(status, resp, err);
+        return ESP_FAIL;
+    }
+    /* Transport-level failure (no body to parse). */
+    if (err != NULL) {
+        memset(err, 0, sizeof(*err));
+        err->http_status = status;
+        err->klass = PUMP_ERROR_RECOVERABLE;
+        strncpy(err->error_name, "TransportError", sizeof(err->error_name) - 1);
+        snprintf(err->message, sizeof(err->message), "%s", esp_err_to_name(rc));
+    }
+    return rc;
+}
+
+esp_err_t pump_initialize(int force, bool ccw, pump_motion_result_t *out,
+                          pump_error_t *err)
+{
+    char body[MAX_BODY_LEN];
+    snprintf(body, sizeof(body), "{\"force\":%d,\"ccw\":%s}", force,
+             ccw ? "true" : "false");
+    return post_motion("/v1/initialize", body, out, err);
+}
+
+esp_err_t pump_valve(int port, bool ccw, pump_motion_result_t *out,
+                     pump_error_t *err)
+{
+    char body[MAX_BODY_LEN];
+    snprintf(body, sizeof(body), "{\"port\":%d,\"ccw\":%s}", port,
+             ccw ? "true" : "false");
+    return post_motion("/v1/valve", body, out, err);
+}
+
+esp_err_t pump_aspirate(float target_uL, pump_motion_result_t *out,
+                        pump_error_t *err)
+{
+    char body[MAX_BODY_LEN];
+    snprintf(body, sizeof(body), "{\"target_uL\":%.3f}", target_uL);
+    return post_motion("/v1/aspirate", body, out, err);
+}
+
+esp_err_t pump_dispense(float target_uL, pump_motion_result_t *out,
+                        pump_error_t *err)
+{
+    char body[MAX_BODY_LEN];
+    snprintf(body, sizeof(body), "{\"target_uL\":%.3f}", target_uL);
+    return post_motion("/v1/dispense", body, out, err);
+}
+
+esp_err_t pump_move_steps(int steps, pump_motion_result_t *out,
+                          pump_error_t *err)
+{
+    char body[MAX_BODY_LEN];
+    snprintf(body, sizeof(body), "{\"steps\":%d}", steps);
+    return post_motion("/v1/move_steps", body, out, err);
+}
+
+esp_err_t pump_prime(int cycles, int source_port, int sink_port,
+                     pump_prime_result_t *out, pump_error_t *err)
+{
+    char body[MAX_BODY_LEN];
+    snprintf(body, sizeof(body),
+             "{\"cycles\":%d,\"source_port\":%d,\"sink_port\":%d}", cycles,
+             source_port, sink_port);
+
+    char resp[MAX_RESP_LEN];
+    int status = 0;
+    esp_err_t rc = http_perform(HTTP_METHOD_POST, "/v1/prime", body, resp,
+                                sizeof(resp), &status);
+    if (rc == ESP_OK) {
+        if (out != NULL) {
+            memset(out, 0, sizeof(*out));
+            cJSON *root = cJSON_Parse(resp);
+            if (root != NULL) {
+                out->cycles_done = json_int(root, "cycles_done", 0);
+                out->ul_per_stroke = json_int(root, "ul_per_stroke", 0);
+                copy_json_str(root, "final_valve", out->final_valve,
+                              sizeof(out->final_valve));
+                out->final_plunger = json_int(root, "final_plunger", 0);
+                cJSON_Delete(root);
+            }
+        }
+        return ESP_OK;
+    }
+    if (rc == ESP_FAIL) {
+        parse_error_body(status, resp, err);
+        return ESP_FAIL;
+    }
+    if (err != NULL) {
+        memset(err, 0, sizeof(*err));
+        err->http_status = status;
+        err->klass = PUMP_ERROR_RECOVERABLE;
+        strncpy(err->error_name, "TransportError", sizeof(err->error_name) - 1);
+        snprintf(err->message, sizeof(err->message), "%s", esp_err_to_name(rc));
+    }
+    return rc;
 }
