@@ -163,3 +163,81 @@ writes a stall current that can damage a small syringe on the next init.
 - [x] Drop the stall-current section from `main.py`; renumber the demo sections.
 - [x] Document hardware-protocol fact still in [CLAUDE.md](CLAUDE.md) "Stall current" section (kept as a reference table) but note the controller does not expose it.
 - [x] Update [README.md](README.md), [DESIGN.md](DESIGN.md), [claude_test/README.md](claude_test/README.md) to remove API references.
+
+## 18. CommonClaude resync to 2a8a597 (2026-05-21, #6)
+
+Refresh the local CommonClaude inheritance pin. Upstream `main` merged
+`feat/c-language-support` (PR #26) on 2026-05-19, pivoting `CLAUDE.md`
+from language-neutral to C-focused and adding §11–§17 (Conventional
+Commits, GitHub Flow, .gitignore, SemVer, PR guidelines, pre-commit,
+References). The original local reconciliation (§15, commit `898ecf3`)
+predates this drift.
+
+Decisions (confirmed 2026-05-21):
+
+1. **C-only sections (§2 naming, §6 clang-format/cppcheck, §13 C
+   .gitignore) are mirrored verbatim.** Python tooling (ruff/mypy/PEP-8)
+   is treated as a "specialization" under CLAUDE.md L13, not a conflict
+   or a waiver. The Explicit waivers list stays empty.
+2. **§11–§17 are adopted in full** with the upstream commit SHA pinned
+   in `Authority order` so future drift is detectable.
+3. **All 5 upstream hooks are mirrored verbatim and registered in
+   `.claude/settings.json`** (PreToolUse Write|Edit/Bash/Read,
+   PostToolUse Write|Edit, Stop).
+4. **No vendor snapshot** — keep CommonClaude as a URL reference; pin
+   via commit SHA only.
+
+Pinned upstream commit:
+
+```
+SHA:     2a8a597ec93132ef401b6f0e446255b6f65e5424
+Short:   2a8a597
+Date:    2026-05-19
+Subject: feat(c): switch CLAUDE.md to C convention (PR #26)
+```
+
+- [x] Cut working branch `feature/commonclaude-resync-2a8a597` from
+  `main` (CommonClaude §12.2 naming).
+- [x] Open GitHub issue [#6](https://github.com/coport-uni/SyringePumpController/issues/6)
+  per CommonClaude §4 mandate.
+- [ ] Update [CLAUDE.md](CLAUDE.md) `Authority order` — replace the
+  `main` permalink with the `2a8a597...` permalink; add a
+  pinned-at clause noting the previous pin `898ecf3`; expand the
+  numbered operational-implications list from §1–§10 to §1–§17;
+  add one sentence stating that C-only upstream rules (§2, §6, §13)
+  apply via Python specialization (ruff/mypy/PEP-8 + Python
+  .gitignore).
+- [ ] Fetch and check in 5 hook scripts at the pinned SHA:
+  `pre-write-guard.sh`, `pre-bash-secret-scan.sh`,
+  `pre-read-env-guard.sh`, `post-write-lint.sh`,
+  `post-write-debug-remind.sh`. Then `chmod +x .claude/hooks/*.sh`.
+- [ ] Pre-flight read each hook for Python-compat issues. Specifically,
+  confirm `post-write-lint.sh` either no-ops on `.py` files or
+  branches on extension; if it unconditionally invokes `clang-format`,
+  log as §19 candidate (do not patch the local mirror).
+- [ ] Verify `jq` is on PATH (upstream LP/E2 dependency for several
+  hooks); if absent, log as §19 candidate.
+- [ ] Merge upstream `env` + `hooks` blocks into
+  [.claude/settings.json](.claude/settings.json) while preserving the
+  local `permissions` allowlist verbatim. Validate with
+  `python -m json.tool`.
+- [ ] [LearnedPatterns.md](LearnedPatterns.md) header drift check —
+  `Last updated` / `Total patterns` / `Provenance format` fields. No
+  change expected; only edit if drift is observed.
+- [ ] Verification: `python -m json.tool .claude/settings.json`,
+  `bash -n .claude/hooks/*.sh`, `.venv/bin/pytest`,
+  `.venv/bin/ruff check src tests claude_test main.py`,
+  `gh api repos/coport-uni/CommonClaude/commits/<SHA> --jq .sha`.
+- [ ] Single commit per CommonClaude §11 Conventional Commits, closing
+  #6.
+- [ ] `gh pr create` per CommonClaude §15.2 template.
+
+Out-of-scope (deliberate):
+
+- Upstream `LearnedPatterns.md` is **not** mirrored — its scope is
+  CommonClaude-self (Docker, jq, secret-scan) while local LP is
+  hardware-specific (CH340, SY-01B, pyserial 3.x). Scopes differ.
+- `Concept.md` and `CLAUDECowork.md` are not mirrored (meta /
+  other-workspace).
+- `pre-commit` (§16) tooling is documented but not installed — track
+  as a future §19 candidate.
