@@ -1,0 +1,10 @@
+# Custom partition table for sy01b-client. 16 MB flash on ESP32-S3-BOX-3.
+# Single factory image (no OTA in v1); 3 MB application is comfortable
+# for ESP-IDF + BSP + LVGL + small client. NVS gets a dedicated "storage"
+# partition for Kconfig overrides (config_store.c).
+#
+# Name,   Type, SubType, Offset,   Size,    Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  3M,
+storage,  data, nvs,     ,         0x4000,

@@ -394,3 +394,68 @@ Out-of-scope for this server phase (handled later or never):
 - Re-introducing the deleted `FakeTransport` driver-level fake
   (§14 Path C remains deferred — fake lives only in `tests/server/`,
   not `src/sy01b/`)
+
+## 21. ESP32-S3 firmware — skeleton + read-only client (2026-05-21, #12)
+
+Phase B of the ESP32 controller initiative. Adds a fresh ESP-IDF v5.3+
+project under `firmware/` for the ESP32-S3-BOX-3. Boots, connects to
+WiFi, reaches the Phase A FastAPI bridge (default
+`http://192.168.1.129:17046`), and renders a status-only LVGL
+dashboard. **Read-only client only** — no motion endpoints are called
+yet (preserves [HIL stays read-only](feedback_hil_readonly) until
+Phase C). Tracked in [#12](https://github.com/coport-uni/SyringePumpController/issues/12).
+
+Stacked on top of [#10](https://github.com/coport-uni/SyringePumpController/issues/10) — Phase A server must merge first
+(the firmware needs something to talk to in HIL).
+
+- [ ] Add `firmware/` ESP-IDF project: `CMakeLists.txt`,
+  `sdkconfig.defaults`, `sdkconfig.defaults.esp32s3` (PSRAM oct 80M,
+  flash QIO 80M 16MB, LVGL fb in PSRAM), `partitions.csv`
+  (nvs / phy_init / factory 3MB / storage NVS),
+  `main/CMakeLists.txt`, `main/idf_component.yml`
+  (`espressif/esp-box-3 ^4.0`), `main/Kconfig.projbuild`
+  (server URL + WiFi defaults).
+- [ ] `main/main.c` — `app_main`: NVS init, BSP init, UI create,
+  `pump_task` spawn. No business logic.
+- [ ] `main/wifi.{c,h}` — STA + auto-reconnect with backoff
+  (1 s → 30 s cap). Posts `STATE_WIFI_LOST` to FSM on disconnect.
+- [ ] `main/config_store.{c,h}` — NVS read of WiFi credentials and
+  server URL on top of Kconfig defaults. Write path stubbed for a
+  future provisioning gesture.
+- [ ] `main/pump_client.{c,h}` — synchronous `esp_http_client`
+  wrappers. **Phase B exposes only `pump_diagnose()` and
+  `pump_status()`**; motion endpoints (initialize / valve /
+  aspirate / dispense / move_steps / prime) ship in §22 / Phase C.
+- [ ] `main/state.{c,h}` — FSM
+  `BOOT → WIFI_CONNECTING → DIAGNOSING → NEEDS_INIT` (no init
+  transition wired yet — Phase C). `lv_async_call` dispatch helpers.
+- [ ] `main/ui.{c,h}` — LVGL 4-tab tabview (Valve / Move / Prime /
+  Status). **Phase B activates only the Status tab** (live
+  voltage/valve/plunger via 2 s `lv_timer`); other tabs show
+  "Phase C" placeholder labels and disabled controls.
+- [ ] `.clang-format` at repo root (LLVM, ColumnLimit 80) — first
+  C code in the repo per CommonClaude §2 + §6.
+- [ ] `firmware/README.md` — how to build/flash, link back to root
+  README and `server/README.md`.
+- [ ] Append commit-boundary bullet to [CLAUDE.md](CLAUDE.md)
+  "Commit boundaries seen so far"; root README links to
+  `firmware/README.md`.
+- [ ] `clang-format --dry-run --Werror firmware/main/*.{c,h}` clean.
+- [ ] `cppcheck --enable=warning,style firmware/main/` clean.
+- [ ] HIL (user-driven; "ESP에 플래시는 내가 진행할께"):
+  `idf.py set-target esp32s3 && idf.py menuconfig && idf.py build
+  flash monitor`. Boot → WiFi → Status tab shows live values from
+  the Phase A server. **No motion endpoint hit.**
+- [ ] If HIL surfaces non-obvious behaviour (PSRAM speed, BSP init
+  order, LVGL thread safety), append a Problem / Cause / Fix / Rule
+  entry to [LearnedPatterns.md](LearnedPatterns.md).
+- [ ] Single Conventional Commits commit closing #12; `gh pr create`
+  per CommonClaude §15.2 template. PR depends on #11 merging first.
+
+## 22. ESP32-S3 firmware — motion UI (planned)
+
+Phase C, planned. Wires `pump_initialize`, `pump_valve`,
+`pump_aspirate`, `pump_dispense`, `pump_move_steps`, `pump_prime`
+HTTP wrappers; fills the Valve / Move / Prime tabs; adds
+`READY` / `BUSY` / `ERROR_*` FSM transitions; error-recovery
+modals. Issue not opened yet — open it when Phase B HIL passes.

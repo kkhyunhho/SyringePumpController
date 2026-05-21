@@ -1,0 +1,10 @@
+## Managed components for sy01b-client.
+##
+## esp-box-3 brings the BSP (display, touch, buttons) and pulls LVGL
+## transitively, so we do not declare LVGL ourselves — pinning two
+## major versions of LVGL would risk a conflict.
+
+dependencies:
+  espressif/esp-box-3: "^4.0"
+  idf:
+    version: ">=5.3"

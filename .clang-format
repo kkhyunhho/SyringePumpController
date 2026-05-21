@@ -1,0 +1,31 @@
+---
+# Repo-wide C/C++ formatting. First applies to firmware/main/ — Python
+# code is governed by ruff (pyproject.toml). LLVM base with 80-col cap
+# to mirror the project's ruff line-length 80 setting.
+BasedOnStyle: LLVM
+ColumnLimit: 80
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+BreakBeforeBraces: Linux
+AlignConsecutiveMacros: AcrossEmptyLines
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  # ESP-IDF / FreeRTOS headers
+  - Regex: '^"(freertos|esp_|driver/|nvs|sdkconfig)'
+    Priority: 2
+  # Component / BSP headers
+  - Regex: '^"(bsp/|lvgl|cJSON)'
+    Priority: 3
+  # Local headers
+  - Regex: '^"[^/]+\.h"$'
+    Priority: 4
+  # Standard library
+  - Regex: '^<.*\.h>$'
+    Priority: 1
+PointerAlignment: Right
+SpaceAfterCStyleCast: false

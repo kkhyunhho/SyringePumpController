@@ -218,6 +218,9 @@ Everything is reachable from a single import: `from sy01b import SyringePumpCont
 **Remote HTTP bridge** (Phase A of the ESP32 controller initiative, [#10](https://github.com/coport-uni/SyringePumpController/issues/10))
 - [server/](server/) — thin FastAPI bridge exposing the driver over `/v1/*` JSON for a remote ESP32-S3 client. Run `sy01b-server --config server/pump.toml` (binds `0.0.0.0:17046`, host PC LAN IP `192.168.1.129` on this bench). Single uvicorn worker + `asyncio.Lock` preserves the driver's single-in-flight contract; long ops (prime ~30 s) block the issuing request. See [server/README.md](server/README.md) for endpoint catalog and error mapping.
 
+**ESP32-S3 client firmware** (Phase B of the ESP32 controller initiative, [#12](https://github.com/coport-uni/SyringePumpController/issues/12))
+- [firmware/](firmware/) — ESP-IDF v5.3+ project for the ESP32-S3-BOX-3 (LVGL touch dashboard). Phase B is **read-only**: WiFi STA, `GET /v1/diagnose` at boot, `GET /v1/status` every 2 s. The Valve / Move / Prime tabs are Phase C placeholders (planned [ToDo §22](ToDo.md)). Build / flash recipe and runtime behaviour in [firmware/README.md](firmware/README.md).
+
 ## What's not yet implemented
 
 The remaining plunger-side surface (see [ToDo.md §6](ToDo.md)):

@@ -1,0 +1,51 @@
+menu "Syringe Pump Client"
+
+    config PUMP_SERVER_URL
+        string "Pump server base URL"
+        default "http://192.168.1.129:17046"
+        help
+            Base URL of the sy01b-server FastAPI bridge running on the
+            PC host. The firmware appends "/v1/..." paths. NVS can
+            override this at runtime (config_store.c) without reflash.
+
+    config PUMP_WIFI_SSID
+        string "WiFi SSID"
+        default ""
+        help
+            LAN access point SSID. Leave blank to require NVS-only
+            provisioning. Empty default refuses to compile a real
+            credential into the binary.
+
+    config PUMP_WIFI_PASSWORD
+        string "WiFi password"
+        default ""
+        help
+            WPA2 passphrase for CONFIG_PUMP_WIFI_SSID. Same NVS
+            override path as the SSID.
+
+    config PUMP_WIFI_MAX_RETRY
+        int "WiFi connect retry count"
+        default 5
+        range 1 100
+        help
+            Initial connect attempt limit before backoff kicks in.
+
+    config PUMP_HTTP_TIMEOUT_MS
+        int "HTTP client read timeout (ms)"
+        default 10000
+        range 1000 120000
+        help
+            Per-request read timeout. Long ops (prime ~30 s) are not
+            issued by Phase B, but the budget should cover them in
+            Phase C without raising this further.
+
+    config PUMP_STATUS_POLL_INTERVAL_MS
+        int "Status tab refresh interval (ms)"
+        default 2000
+        range 500 60000
+        help
+            How often the Status tab fetches GET /v1/status when the
+            tab is visible. The poll is paused when a different tab
+            is active.
+
+endmenu

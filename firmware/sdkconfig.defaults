@@ -1,0 +1,31 @@
+# Base sdkconfig defaults for sy01b-client. Target-specific overrides
+# live in sdkconfig.defaults.esp32s3.
+
+# --- Target ---
+CONFIG_IDF_TARGET="esp32s3"
+
+# --- Partitions ---
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# --- FreeRTOS ---
+CONFIG_FREERTOS_HZ=1000
+
+# --- HTTP client ---
+# Larger response buffer for diagnose payload (~300 B today, headroom
+# for Phase C error envelopes). Keep TLS off — LAN-only plaintext.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_ESP_TLS_INSECURE=y
+
+# --- Log level ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# --- WiFi ---
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
+
+# --- LVGL ---
+# BSP picks LVGL config; we just make sure double-buffering uses PSRAM.
+CONFIG_BSP_DISPLAY_LVGL_BUF_PSRAM=y
