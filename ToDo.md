@@ -571,3 +571,34 @@ rule — see open question at the bottom).
 - [ ] (Pending user go-ahead) Cut a `chore/<...>` branch from `main`,
   single Conventional Commits commit, `gh pr create --base main`
   closing #17 per CLAUDE.md §4 / §12 / §15.
+
+## 24. Fix invalid step_mode in server/pump.toml.example (2026-06-01, #1)
+
+- [x] Change `step_mode = "NORMAL"` → `step_mode = "N0"` in
+  [server/pump.toml.example](server/pump.toml.example). `StepMode` is a
+  `StrEnum` whose values are wire-protocol codes (`"N0"`/`"N1"`/`"N2"`),
+  not member names; `Config.from_toml` looks up by *value*
+  (`StepMode(step)`) so `"NORMAL"` raises `ValueError` and the server
+  crashed on startup for any user who copied the example verbatim.
+- [x] Add regression test
+  [tests/server/test_pump_toml_example.py](tests/server/test_pump_toml_example.py)
+  that loads `server/pump.toml.example` via
+  `SyringePumpController.Config.from_toml(...)` and asserts the
+  round-trip lands on `StepMode.NORMAL`. Catches future drift between
+  the example file and the enum's wire values.
+- [x] Verify: `pytest` 148 passed (145 baseline + 3 new) ·
+  `ruff format --check` clean · `mypy` clean. Pre-existing `ruff` I001
+  in `tests/server/conftest.py` is HEAD-state and out of scope (see
+  §23). Pytest collection failure on HEAD from `starlette 1.2.1`
+  deprecating `httpx` via `filterwarnings = ["error"]` is also out of
+  scope — env drift, not introduced by this change; tests run cleanly
+  with `-W ignore::starlette.exceptions.StarletteDeprecationWarning`.
+- [x] Repository note: issue created on the personal fork
+  (`kkhyunhho/SyringePumpController`) rather than `coport-uni`
+  upstream — explicit user choice this session. Breaks ToDo's
+  prevailing `(coport-uni#N)` numbering pattern; #1 here is *not*
+  comparable to #1 there.
+- [x] `gh issue create` →
+  [#1](https://github.com/kkhyunhho/SyringePumpController/issues/1).
+- [x] PR opened against `kkhyunhho/main` closing #1
+  (see commit on `fix/pump-toml-example-step-mode`).
