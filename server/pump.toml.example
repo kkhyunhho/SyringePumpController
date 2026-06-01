@@ -7,7 +7,7 @@ port = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
 address = 1
 baud = 9600
 syringe_uL = 125
-step_mode = "NORMAL"
+step_mode = "N0"
 reply_timeout_s = 1.0
 
 [server]

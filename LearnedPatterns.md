@@ -2,8 +2,8 @@
 
 > Patterns extracted from [ToDo.md](ToDo.md) Completed items. Consult the relevant sections before drafting new ToDo entries. Append new patterns after each task completes.
 >
-> Last updated: 2026-05-18
-> Total patterns: 19
+> Last updated: 2026-06-01
+> Total patterns: 20
 >
 > Provenance format: `(from ToDo#N)` where N is the 1-based index of the top-level `##` section in `ToDo.md` at the time of extraction. Patterns extracted from design rather than from completed work use `(from DESIGN.md §N)` until a corresponding ToDo item lands.
 
@@ -58,6 +58,13 @@
 - **Cause**: Field-default expressions on `@dataclass` are evaluated when the dataclass class is being constructed — which is *during* the outer class's body, before the outer class has been bound to its name. `Pump.StepMode.NORMAL` is therefore unresolvable. Same problem applies to any class-attribute access on the enclosing class for use as a default.
 - **Fix**: Use `field(default_factory=lambda: Pump.StepMode.NORMAL)`. The factory closure is evaluated at instance-construction time, by which point `Pump` is fully defined.
 - **Rule**: When nesting a frozen+slots dataclass inside another class, any default that references an enclosing-class attribute must go through `field(default_factory=lambda: ...)`. Bare-name defaults from the *same* class body (e.g. `_DEVICE_ERROR_BY_CODE = {...}` after every DeviceError subclass is defined) still work because they resolve in the body's local namespace. (from ToDo#0, consolidation refactor)
+
+### G7. Enum-valued config keys must use wire values, not member names
+
+- **Problem**: `server/pump.toml.example` shipped with `step_mode = "NORMAL"`. Any user who copied the example verbatim and ran `sy01b-server` hit `ValueError: 'NORMAL' is not a valid SyringePumpController.StepMode` at startup.
+- **Cause**: `StepMode` is a `StrEnum` whose *values* are the wire-protocol codes (`NORMAL = "N0"`, `FINE = "N1"`, `MICRO = "N2"`). `Config.from_toml` resolves the TOML string by value (`StepMode(step)`), so the member *name* `"NORMAL"` does not match anything. Same trap applies to any future enum-valued config key.
+- **Fix**: Use the wire value in the example: `step_mode = "N0"`. Add a regression test (`tests/server/test_pump_toml_example.py`) that loads the example via `Config.from_toml(...)` and asserts the round-trip lands on `StepMode.NORMAL`, so future enum-value renames or example-file drift fail loudly in CI.
+- **Rule**: When an example/template file references an enum value, write the enum's *value* string (the wire code), not the member name — and back it with a test that actually parses the example file. Examples are documentation that should be machine-verified; an example that crashes on first run is worse than no example. (from ToDo#24)
 
 ---
 
