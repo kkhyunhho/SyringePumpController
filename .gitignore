@@ -22,3 +22,12 @@ coverage.xml
 
 # Local bench config (copy server/pump.toml.example and edit per machine)
 server/pump.toml
+
+# Firmware build outputs / per-bench sdkconfig
+firmware/build/
+firmware/managed_components/
+
+# Per-bench ESP-IDF config — contains WiFi SSID/password and server URL.
+# Generated/edited via `idf.py menuconfig`. NEVER commit (secret leak).
+firmware/sdkconfig
+firmware/sdkconfig.old
