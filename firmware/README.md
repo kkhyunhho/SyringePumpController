@@ -16,12 +16,21 @@ port 1, one cycle), Status tab (2 s refresh). Error modals
 
 - **Board:** Espressif ESP32-S3-BOX-3 (320×240 LCD, capacitive touch,
   GT911 controller, 2 front buttons, octal PSRAM, 16 MB QIO flash).
-- Drivers via the [`espressif/esp-box-3`](https://components.espressif.com/components/espressif/esp-box-3) BSP (`^4.0`) which
-  pulls a compatible LVGL transitively.
+- Drivers via the [`espressif/esp-box-3`](https://components.espressif.com/components/espressif/esp-box-3) BSP, pinned at
+  **`^3.2`** in [main/idf_component.yml](main/idf_component.yml).
+  The registry's `4.x` line never shipped publicly; staying on `^3.2`
+  resolves to `3.2.0` and transitively pulls **LVGL 9.5.0**.
+- JSON parsing via `espressif/cjson ^1.7` (also a managed component).
+  ESP-IDF v6 dropped the built-in `json` component, so `cjson` is
+  declared explicitly.
 
 ## Tooling
 
-- **ESP-IDF v5.3+** (latest stable recommended).
+- **ESP-IDF v5.3+** — verified working on v6.0.1. `pump_client.c`
+  consumes the registry `espressif/cjson` (not a built-in component
+  on v6), and `ui.c` targets LVGL 9.x APIs (`lv_msgbox_create(parent)`
+  + `lv_msgbox_add_*`, per-button click handlers, two-call spinner
+  setup). Older ESP-IDF / LVGL combinations need a back-port.
 - **clang-format** (LLVM 18, 80 col) — repo `.clang-format` at root.
 - **cppcheck** ≥ 2.13.
 
@@ -36,9 +45,15 @@ cd firmware
 idf.py set-target esp32s3
 idf.py menuconfig
 #   "Syringe Pump Client" submenu:
-#     PUMP_SERVER_URL  = http://192.168.1.129:17046   (default — change if your PC IP differs)
+#     PUMP_SERVER_URL  = http://192.168.1.129:17046   (default — change if your PC IP / port differs)
 #     PUMP_WIFI_SSID   = <your LAN SSID>
 #     PUMP_WIFI_PASSWORD = <WPA2 PSK>
+#
+#   Component config → ESP System Settings → Main task stack size:
+#     CONFIG_ESP_MAIN_TASK_STACK_SIZE = 12288
+#     The 3584-byte default overflows during the first HTTP call
+#     (esp_http_client + cJSON parsing on the main task). Bumping to
+#     12 KiB clears it. Local-only — sdkconfig is gitignored.
 idf.py build
 idf.py -p /dev/ttyACM0 flash monitor   # adjust port to your dev kit
 ```
@@ -84,6 +99,20 @@ bench machine.
 9. On WiFi disconnect the banner turns red ("WiFi lost — reconnecting")
    and the status poll pauses; commands queued during the outage
    still execute when the link returns (one in flight at a time).
+10. **Boot order matters.** If the PC server is *not* reachable when
+    the firmware issues its boot-time `GET /v1/diagnose`, `app_main`
+    parks the FSM in `ERROR_RECOVERABLE` and returns *without*
+    spawning `status_task` — the device is then stuck until reboot.
+    Workaround: start `bash server_run.sh` on the PC first, confirm
+    `curl http://localhost:<port>/v1/health`, *then* power the
+    ESP32. A boot-time-diagnose-retry path is tracked as a
+    follow-up (ToDo §26 audit item).
+11. **Auto-advance to READY.** Once an external client (curl,
+    `/docs`, another LAN device) drives `POST /v1/initialize`, the
+    next `GET /v1/status` poll sees `error_code == 0` + valve
+    homed and `state_update_status` advances `NEEDS_INIT → READY`
+    so the banner flips amber → green without requiring the
+    on-screen / BSP Initialize path.
 
 ## Static analysis
 
@@ -107,7 +136,7 @@ firmware/
 └── main/
     ├── CMakeLists.txt
     ├── Kconfig.projbuild       # menuconfig "Syringe Pump Client"
-    ├── idf_component.yml       # esp-box-3 ^4.0
+    ├── idf_component.yml       # esp-box-3 ^3.2 + cjson ^1.7
     ├── main.c                  # app_main + pump_task + status_task + BSP btns
     ├── wifi.{c,h}              # STA + auto-reconnect, posts FSM events
     ├── config_store.{c,h}      # NVS read of Kconfig-default overrides
