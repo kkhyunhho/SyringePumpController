@@ -211,25 +211,26 @@ class TestPrime:
         assert r.status_code == 200
         body = r.json()
         assert body["cycles_done"] == 1
-        assert body["ul_per_stroke"] == 125
+        assert body["ul_per_stroke"] == 125  # default = full syringe
         assert body["final_valve"] == "1"
         assert body["final_plunger"] == 0
-        # Verify the 4-step sequence per cycle, in order:
-        # valve→3, plunger→12000, valve→1, plunger→0.
+        # The valve is aligned to the sink and the syringe emptied first
+        # (precondition), then each cycle is
+        # valve→source, aspirate, valve→sink, dispense→0.
         seq = [c[0] for c in fake_pump.calls[before:]]
-        # First 4 are the move sequence; trailing query_* are not recorded.
-        assert seq[:4] == [
-            "move_valve_to_port",
-            "move_to_steps",
-            "move_valve_to_port",
-            "move_to_steps",
+        assert seq == [
+            "move_valve_to_port",  # precondition: → sink
+            "dispense_uL",  # precondition: empty to 0
+            "move_valve_to_port",  # → source
+            "aspirate_uL",
+            "move_valve_to_port",  # → sink
+            "dispense_uL",
         ]
-        # Args check
-        steps_calls = [
-            c for c in fake_pump.calls[before:] if c[0] == "move_to_steps"
-        ]
-        assert steps_calls[0][1] == (12000,)  # aspirate full stroke
-        assert steps_calls[1][1] == (0,)  # dispense
+        # Default aspirate is a full syringe; dispense empties to 0.
+        asp = [c for c in fake_pump.calls[before:] if c[0] == "aspirate_uL"]
+        assert asp[0][1] == (125,)
+        disp = [c for c in fake_pump.calls[before:] if c[0] == "dispense_uL"]
+        assert all(c[1] == (0,) for c in disp)
 
     def test_three_cycles(
         self, client: TestClient, fake_pump: FakePump
@@ -239,8 +240,31 @@ class TestPrime:
         r = client.post("/v1/prime", json={"cycles": 3})
         assert r.status_code == 200
         assert r.json()["cycles_done"] == 3
-        moves = [c for c in fake_pump.calls[before:] if c[0] == "move_to_steps"]
-        assert len(moves) == 6  # 2 per cycle * 3
+        calls = fake_pump.calls[before:]
+        # One aspirate per cycle; one dispense per cycle plus the
+        # precondition empty.
+        assert len([c for c in calls if c[0] == "aspirate_uL"]) == 3
+        assert len([c for c in calls if c[0] == "dispense_uL"]) == 4
+
+    def test_volume_uL_sets_per_cycle_aspirate(
+        self, client: TestClient, fake_pump: FakePump
+    ) -> None:
+        client.post("/v1/initialize", json={})
+        before = len(fake_pump.calls)
+        r = client.post("/v1/prime", json={"cycles": 2, "volume_uL": 60})
+        assert r.status_code == 200
+        assert r.json()["ul_per_stroke"] == 60
+        asp = [c for c in fake_pump.calls[before:] if c[0] == "aspirate_uL"]
+        assert [c[1] for c in asp] == [(60,), (60,)]
+
+    def test_volume_uL_clamps_to_syringe(
+        self, client: TestClient, fake_pump: FakePump
+    ) -> None:
+        client.post("/v1/initialize", json={})
+        r = client.post("/v1/prime", json={"cycles": 1, "volume_uL": 999})
+        assert r.status_code == 200
+        # Cannot aspirate past a full stroke — clamped to the syringe size.
+        assert r.json()["ul_per_stroke"] == 125
 
     def test_invalid_source_port_returns_422(self, client: TestClient) -> None:
         r = client.post("/v1/prime", json={"source_port": 99})

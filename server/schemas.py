@@ -93,6 +93,10 @@ class PrimeRequest(BaseModel):
     cycles: int = Field(default=1, ge=1, le=100)
     source_port: int = Field(default=3, ge=1, le=16)
     sink_port: int = Field(default=1, ge=1, le=16)
+    # Per-cycle aspirate volume. ``None`` means a full syringe stroke; the
+    # route resolves it against ``Config.syringe_uL``. Lets the operator
+    # cycle less than a full stroke from the Aspirate/Dispense tab slider.
+    volume_uL: float | None = Field(default=None, ge=0)
 
 
 class PrimeResponse(BaseModel):

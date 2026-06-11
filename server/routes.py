@@ -185,36 +185,49 @@ async def move_steps(
     "/prime",
     response_model=PrimeResponse,
     tags=["Motion"],
-    summary="Cycle source → sink at full stroke (Prime tab — PRIME button)",
+    summary="Cycle source → sink (Aspirate/Dispense tab — START button)",
     description=(
-        "Each cycle = `valve→source, plunger→full, valve→sink, plunger→0`. "
-        "The driver lock is held for the entire sequence so other "
-        "endpoints cannot race a prime in progress."
+        "Aligns the valve to the sink and empties the syringe first, so "
+        "every dispense leaves via the sink (not back out the source). "
+        "Each cycle then = `valve→source, aspirate volume_uL, valve→sink, "
+        "dispense→0`. `volume_uL` defaults to a full syringe stroke. The "
+        "driver lock is held for the whole sequence so other endpoints "
+        "cannot race it."
     ),
 )
 async def prime(req: PrimeRequest, request: Request) -> PrimeResponse:
     pump = _pump(request)
     cfg: SyringePumpController.Config = request.app.state.config
-    stroke = cfg.step_mode.full_stroke_steps
-    ul_per_stroke = cfg.syringe_uL
+    # Resolve the per-cycle aspirate volume: None → full stroke. Clamp to
+    # the syringe size — you physically cannot aspirate past full travel.
+    vol_uL = cfg.syringe_uL if req.volume_uL is None else req.volume_uL
+    vol_uL = min(vol_uL, float(cfg.syringe_uL))
 
-    def _run_prime() -> tuple[int, str, int]:
+    def _run_prime() -> tuple[int, int, str, int]:
+        # Precondition: valve on the sink and plunger emptied to 0, so the
+        # first aspirate draws cleanly from the source and any residual is
+        # expelled to the sink rather than the source.
+        pump.move_valve_to_port(req.sink_port)
+        pump.dispense_uL(0)
         for _ in range(req.cycles):
             pump.move_valve_to_port(req.source_port)
-            pump.move_to_steps(stroke)
+            pump.aspirate_uL(vol_uL)
             pump.move_valve_to_port(req.sink_port)
-            pump.move_to_steps(0)
+            pump.dispense_uL(0)
         final_valve = pump.query_valve_position()
         final_plunger = pump.query_plunger_position()
-        return (req.cycles, final_valve, final_plunger)
+        return (req.cycles, round(vol_uL), final_valve, final_plunger)
 
     async with request.app.state.pump_lock:
-        cycles_done, final_valve, final_plunger = await run_in_threadpool(
-            _run_prime
-        )
+        (
+            cycles_done,
+            vol_done,
+            final_valve,
+            final_plunger,
+        ) = await run_in_threadpool(_run_prime)
     return PrimeResponse(
         cycles_done=cycles_done,
-        ul_per_stroke=ul_per_stroke,
+        ul_per_stroke=vol_done,
         final_valve=final_valve,
         final_plunger=final_plunger,
     )
