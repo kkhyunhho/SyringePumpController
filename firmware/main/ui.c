@@ -44,23 +44,24 @@ static lv_obj_t *s_tabview;
 /* Valve tab */
 static lv_obj_t *s_valve_buttons[4];
 static int s_active_valve_port = -1;
-/* Rotor diagram in the middle of the four port buttons. Two coloured
- * chords show the currently connected port pairs:
- *   BLUE   = Path 1 (syringe-active, C-connected)
- *   ORANGE = Path 2 (passive bypass)
- * The MCC-4 manual (§2.2.3) defines only two physical states; the
- * pump firmware exposes them as 4 positions where each button maps
- * Port × Path. Mapping used by ``valve_diagram_render``:
- *   pos 1 (Port 1 → Path 1) = state1  ⇒ BLUE C↔1, ORANGE 2↔3
- *   pos 2 (Port 3 → Path 1) = state2  ⇒ BLUE C↔3, ORANGE 1↔2
- *   pos 3 (Port 1 → Path 2) = state2  (Port 1 sits on bypass)
- *   pos 4 (Port 3 → Path 2) = state1  (Port 3 sits on bypass)
+/* Rotor diagram overlaid in the centre of the 2x2 port-button grid.
+ * Two coloured chords show the valve state. The *named* port (1 or 3)
+ * is always tied to the common C; that chord carries the Path colour
+ * (Path 1 = BLUE, Path 2 = ORANGE). The remaining two ports are
+ * bridged (bypass) and drawn in the other Path's colour. Per-position
+ * chords set by ``valve_diagram_render``:
+ *   pos 1 (Port 1 → Path 1): BLUE  C↔1, ORANGE 2↔3
+ *   pos 2 (Port 3 → Path 1): BLUE  C↔3, ORANGE 1↔2
+ *   pos 3 (Port 1 → Path 2): ORANGE C↔1, BLUE 2↔3
+ *   pos 4 (Port 3 → Path 2): ORANGE C↔3, BLUE 1↔2
+ * Colour is therefore set at render time, not creation time: the same
+ * geometric chord (e.g. C↔1) is blue under pos 1 but orange under pos 3.
  */
 static lv_obj_t *s_valve_diagram;
-static lv_obj_t *s_valve_line_c_p1;  /* BLUE state1 (C↔Port 1) */
-static lv_obj_t *s_valve_line_c_p3;  /* BLUE state2 (C↔Port 3) */
-static lv_obj_t *s_valve_line_p2_p3; /* ORANGE state1 (Port 2↔Port 3) */
-static lv_obj_t *s_valve_line_p1_p2; /* ORANGE state2 (Port 1↔Port 2) */
+static lv_obj_t *s_valve_line_c_p1;  /* chord C↔Port 1 */
+static lv_obj_t *s_valve_line_c_p3;  /* chord C↔Port 3 */
+static lv_obj_t *s_valve_line_p2_p3; /* chord Port 2↔Port 3 */
+static lv_obj_t *s_valve_line_p1_p2; /* chord Port 1↔Port 2 */
 
 /* Move tab */
 static lv_obj_t *s_move_slider;
@@ -72,10 +73,15 @@ static lv_obj_t *s_move_history_label; /* "Last: ..." */
 /* Status tab — reconnect button to retry diagnose after a server outage. */
 static lv_obj_t *s_reconnect_btn;
 
-/* Prime tab — operator-configurable cycles / source / sink (replaces
- * the previously hard-coded {cycles=1, source=3, sink=1}). Source and
- * sink are surfaced as Port 1 / Port 3 dropdowns since MCC-4 has only
- * those two physically meaningful states (CLAUDE.md §"Hardware"). */
+/* Aspirate/Dispense tab — operator-configurable cycles / source / sink /
+ * per-cycle volume. Source and sink select a full *valve position*
+ * (1-4, the ``Port n to Path m`` set shared with the Valve tab) rather
+ * than just a leading port number: positions 1 and 3 are both physical
+ * Port 1, so the old "Port 1 / Port 3" dropdown actually drove both
+ * source and sink onto physical Port 1 (fluid came back out the source).
+ * The volume slider mirrors the Move tab's Target bar and sets how much
+ * each cycle aspirates from the source before dispensing it to the
+ * sink. ``s_prime_source`` / ``s_prime_sink`` hold valve positions. */
 static lv_obj_t *s_prime_btn;
 static lv_obj_t *s_prime_btn_label;
 static lv_obj_t *s_prime_spinner;
@@ -83,12 +89,14 @@ static lv_obj_t *s_prime_label;
 static lv_obj_t *s_prime_cycles_label;
 static lv_obj_t *s_prime_source_dd;
 static lv_obj_t *s_prime_sink_dd;
+static lv_obj_t *s_prime_volume_slider;
+static lv_obj_t *s_prime_volume_label;
 static int s_prime_cycles = 1;
-static int s_prime_source = 1; /* default flipped from 3 → 1 so that the
-                                  default direction is "fill port 1's
-                                  tube via port 3 as waste" (operator's
-                                  typical workflow). */
-static int s_prime_sink = 3;
+/* Defaults: source = pos 1 (Port 1 → Path 1, physical Port 1),
+ * sink = pos 2 (Port 3 → Path 1, physical Port 3) — a real source→sink
+ * pair, unlike the old 1/3 which collapsed to one physical port. */
+static int s_prime_source = 1;
+static int s_prime_sink = 2;
 
 /* Status tab */
 static lv_obj_t *s_status_table;
@@ -125,53 +133,64 @@ static void valve_btn_event_cb(lv_event_t *e)
     enqueue_or_toast(&cmd, "Pump busy");
 }
 
-/* Rotor diagram is an 84x84 lv_obj with border 2 → 80x80 content area.
- * Child coordinates (chord endpoints, label offsets) live in that
- * content-area space; the center is at (40, 40). Each port endpoint
- * sits 28 px from center along an axis (~70 % of the 40-px radius),
- * leaving a few pixels between chord tip and port label. */
-static const lv_point_precise_t VALVE_PTS_C_P1[] = {{40, 68}, {12, 40}};
-static const lv_point_precise_t VALVE_PTS_C_P3[] = {{40, 68}, {68, 40}};
-static const lv_point_precise_t VALVE_PTS_P2_P3[] = {{40, 12}, {68, 40}};
-static const lv_point_precise_t VALVE_PTS_P1_P2[] = {{12, 40}, {40, 12}};
+/* Rotor diagram is a 64x64 lv_obj with border 2 → 60x60 content area
+ * (diameter cut ~1/4 from the former 84 px so the four buttons can
+ * tile the whole tab behind it). Child coordinates (chord endpoints,
+ * label offsets) live in that content-area space; the center is at
+ * (30, 30). Each port endpoint sits 21 px from center along an axis
+ * (~70 % of the 30-px radius), leaving a few pixels between chord tip
+ * and port label. */
+static const lv_point_precise_t VALVE_PTS_C_P1[] = {{30, 51}, {9, 30}};
+static const lv_point_precise_t VALVE_PTS_C_P3[] = {{30, 51}, {51, 30}};
+static const lv_point_precise_t VALVE_PTS_P2_P3[] = {{30, 9}, {51, 30}};
+static const lv_point_precise_t VALVE_PTS_P1_P2[] = {{9, 30}, {30, 9}};
 
 static void valve_diagram_render(int position)
 {
-    if (s_valve_line_c_p1 == NULL) {
+    lv_obj_t *chords[4] = {s_valve_line_c_p1, s_valve_line_c_p3,
+                           s_valve_line_p2_p3, s_valve_line_p1_p2};
+    if (chords[0] == NULL) {
         return;
+    }
+    for (int i = 0; i < 4; ++i) {
+        lv_obj_add_flag(chords[i], LV_OBJ_FLAG_HIDDEN);
     }
     /* Unknown valve position (status hasn't landed, or pump reports "?")
-     * → hide all chords. Rotor body + port labels stay visible. */
+     * → leave all chords hidden. Rotor body + port labels stay visible. */
     if (position < 1 || position > 4) {
-        lv_obj_add_flag(s_valve_line_c_p1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_valve_line_c_p3, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_valve_line_p2_p3, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_valve_line_p1_p2, LV_OBJ_FLAG_HIDDEN);
         return;
     }
-    bool state1 = (position == 1 || position == 4);
-    if (state1) {
-        lv_obj_clear_flag(s_valve_line_c_p1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(s_valve_line_p2_p3, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_valve_line_c_p3, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_valve_line_p1_p2, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_clear_flag(s_valve_line_c_p3, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(s_valve_line_p1_p2, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_valve_line_c_p1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_valve_line_p2_p3, LV_OBJ_FLAG_HIDDEN);
-    }
+    /* The named port (Port 1 for pos 1/3, Port 3 for pos 2/4) ties to C;
+     * that chord carries the Path colour. The remaining two ports bridge
+     * (bypass) in the other Path's colour. */
+    bool port1 = (position == 1 || position == 3);
+    bool path1 = (position == 1 || position == 2);
+    lv_obj_t *c_chord = port1 ? s_valve_line_c_p1 : s_valve_line_c_p3;
+    lv_obj_t *bypass = port1 ? s_valve_line_p2_p3 : s_valve_line_p1_p2;
+    lv_color_t c_color =
+        lv_palette_main(path1 ? LV_PALETTE_BLUE : LV_PALETTE_ORANGE);
+    lv_color_t bypass_color =
+        lv_palette_main(path1 ? LV_PALETTE_ORANGE : LV_PALETTE_BLUE);
+    lv_obj_set_style_line_color(c_chord, c_color, LV_PART_MAIN);
+    lv_obj_set_style_line_color(bypass, bypass_color, LV_PART_MAIN);
+    lv_obj_clear_flag(c_chord, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(bypass, LV_OBJ_FLAG_HIDDEN);
 }
 
+/* One of the two grid rows. Each row grows to fill half the tab height
+ * and lays its two buttons out side by side; the buttons themselves
+ * grow to fill the row width. The 2x2 result tiles the whole tab. */
 static void valve_row_setup(lv_obj_t *row)
 {
-    lv_obj_set_size(row, LV_PCT(100), 48);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_flex_grow(row, 1);
     lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_gap(row, 4, LV_PART_MAIN);
     lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_layout(row, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER,
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scroll_dir(row, LV_DIR_NONE);
 }
@@ -179,7 +198,8 @@ static void valve_row_setup(lv_obj_t *row)
 static void valve_add_button(lv_obj_t *row, const char *text, int port_index)
 {
     lv_obj_t *btn = lv_btn_create(row);
-    lv_obj_set_size(btn, 144, 44);
+    lv_obj_set_flex_grow(btn, 1);       /* fill half the row width */
+    lv_obj_set_height(btn, LV_PCT(100)); /* fill the row height */
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, text);
     lv_obj_center(label);
@@ -188,30 +208,40 @@ static void valve_add_button(lv_obj_t *row, const char *text, int port_index)
     s_valve_buttons[port_index] = btn;
 }
 
+/* Colour is applied per-position in ``valve_diagram_render`` (the same
+ * chord switches palette between Path 1 and Path 2), so creation only
+ * sets geometry + stroke. */
 static void valve_add_chord(lv_obj_t **out, lv_obj_t *parent,
-                            const lv_point_precise_t pts[2],
-                            lv_palette_t palette)
+                            const lv_point_precise_t pts[2])
 {
     *out = lv_line_create(parent);
     lv_line_set_points(*out, pts, 2);
-    lv_obj_set_style_line_color(*out, lv_palette_main(palette), LV_PART_MAIN);
-    lv_obj_set_style_line_width(*out, 5, LV_PART_MAIN);
+    lv_obj_set_style_line_width(*out, 4, LV_PART_MAIN);
     lv_obj_set_style_line_rounded(*out, true, LV_PART_MAIN);
 }
 
+/* The valve exposes four Port × Path positions (1-4). Both the Valve
+ * tab buttons and the Asp/Disp source/sink selectors choose among them;
+ * index i ↔ valve position i+1, which is the ``I<n>`` argument sent to
+ * the pump. MCC-4 has 2 mechanical states (C-1+2-3 vs C-3+1-2) that the
+ * firmware exposes as these 4 positions. CRUCIAL: positions 1 and 3 are
+ * both physical Port 1 (Path 1 vs Path 2), and positions 2 and 4 are
+ * both physical Port 3 — so a source/sink pair must differ by *position*
+ * here, not just by the leading port number. */
+static const char *const VALVE_POSITION_LABELS[4] = {
+    "Port 1 to Path 1", /* position 1 */
+    "Port 3 to Path 1", /* position 2 */
+    "Port 1 to Path 2", /* position 3 */
+    "Port 3 to Path 2", /* position 4 */
+};
+
 static void create_valve_tab(lv_obj_t *parent)
 {
-    /* Per-port button labels. MCC-4 has 2 mechanical states (C-1+2-3 vs
-     * C-3+1-2); the pump firmware exposes them as 4 positions. Each
-     * label maps Port (1 or 3) × Path (1 = syringe-active, 2 = passive
-     * bypass). */
-    static const char *VALVE_BTN_LABELS[4] = {
-        "Port 1 to Path 1", /* position 1 */
-        "Port 3 to Path 1", /* position 2 */
-        "Port 1 to Path 2", /* position 3 */
-        "Port 3 to Path 2", /* position 4 */
-    };
-
+    /* Four buttons tile the whole tab as a 2x2 grid (two flex rows, each
+     * growing to half the height; two buttons per row, each growing to
+     * half the width). The rotor diagram is overlaid in the centre
+     * afterwards, so the buttons fill the formerly-empty space either
+     * side of it and nothing runs off the bottom of the screen. */
     lv_obj_set_layout(parent, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(parent, 4, LV_PART_MAIN);
@@ -221,19 +251,24 @@ static void create_valve_tab(lv_obj_t *parent)
     /* Top row: positions 1 and 2 (both Path 1 — syringe-active). */
     lv_obj_t *top_row = lv_obj_create(parent);
     valve_row_setup(top_row);
-    valve_add_button(top_row, VALVE_BTN_LABELS[0], 0);
-    valve_add_button(top_row, VALVE_BTN_LABELS[1], 1);
+    valve_add_button(top_row, VALVE_POSITION_LABELS[0], 0);
+    valve_add_button(top_row, VALVE_POSITION_LABELS[1], 1);
 
-    /* Middle: rotor diagram (84x84) centered. */
-    lv_obj_t *diag_wrap = lv_obj_create(parent);
-    lv_obj_set_size(diag_wrap, LV_PCT(100), 88);
-    lv_obj_set_style_pad_all(diag_wrap, 0, LV_PART_MAIN);
-    lv_obj_set_style_border_width(diag_wrap, 0, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(diag_wrap, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_scroll_dir(diag_wrap, LV_DIR_NONE);
+    /* Bottom row: positions 3 and 4 (both Path 2 — passive). */
+    lv_obj_t *bot_row = lv_obj_create(parent);
+    valve_row_setup(bot_row);
+    valve_add_button(bot_row, VALVE_POSITION_LABELS[2], 2);
+    valve_add_button(bot_row, VALVE_POSITION_LABELS[3], 3);
 
-    s_valve_diagram = lv_obj_create(diag_wrap);
-    lv_obj_set_size(s_valve_diagram, 84, 84);
+    /* Rotor diagram (64x64) floated over the centre of the grid. It is
+     * excluded from the flex flow (IGNORE_LAYOUT) and aligned to the tab
+     * centre, then raised to the foreground so it reads as a status
+     * "hole" punched through the four buttons. Non-clickable so taps in
+     * the centre still reach the button underneath. */
+    s_valve_diagram = lv_obj_create(parent);
+    lv_obj_add_flag(s_valve_diagram, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_remove_flag(s_valve_diagram, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(s_valve_diagram, 64, 64);
     lv_obj_align(s_valve_diagram, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_radius(s_valve_diagram, LV_RADIUS_CIRCLE, LV_PART_MAIN);
     lv_obj_set_style_border_width(s_valve_diagram, 2, LV_PART_MAIN);
@@ -250,10 +285,10 @@ static void create_valve_tab(lv_obj_t *parent)
         int x;
         int y;
     } LABELS[] = {
-        {"1", -32, 0}, /* left */
-        {"2", 0, -32}, /* top */
-        {"3", 32, 0},  /* right */
-        {"C", 0, 32},  /* bottom */
+        {"1", -24, 0}, /* left */
+        {"2", 0, -24}, /* top */
+        {"3", 24, 0},  /* right */
+        {"C", 0, 24},  /* bottom */
     };
     for (int i = 0; i < 4; ++i) {
         lv_obj_t *l = lv_label_create(s_valve_diagram);
@@ -265,23 +300,14 @@ static void create_valve_tab(lv_obj_t *parent)
     }
 
     /* All four chords created upfront; valve_diagram_render toggles
-     * visibility per state. BLUE = syringe-active path 1, ORANGE =
-     * passive bypass path 2. */
-    valve_add_chord(&s_valve_line_c_p1, s_valve_diagram, VALVE_PTS_C_P1,
-                    LV_PALETTE_BLUE);
-    valve_add_chord(&s_valve_line_c_p3, s_valve_diagram, VALVE_PTS_C_P3,
-                    LV_PALETTE_BLUE);
-    valve_add_chord(&s_valve_line_p2_p3, s_valve_diagram, VALVE_PTS_P2_P3,
-                    LV_PALETTE_ORANGE);
-    valve_add_chord(&s_valve_line_p1_p2, s_valve_diagram, VALVE_PTS_P1_P2,
-                    LV_PALETTE_ORANGE);
+     * visibility and colour per position. */
+    valve_add_chord(&s_valve_line_c_p1, s_valve_diagram, VALVE_PTS_C_P1);
+    valve_add_chord(&s_valve_line_c_p3, s_valve_diagram, VALVE_PTS_C_P3);
+    valve_add_chord(&s_valve_line_p2_p3, s_valve_diagram, VALVE_PTS_P2_P3);
+    valve_add_chord(&s_valve_line_p1_p2, s_valve_diagram, VALVE_PTS_P1_P2);
     valve_diagram_render(-1); /* hide all until /v1/status lands */
 
-    /* Bottom row: positions 3 and 4 (both Path 2 — passive). */
-    lv_obj_t *bot_row = lv_obj_create(parent);
-    valve_row_setup(bot_row);
-    valve_add_button(bot_row, VALVE_BTN_LABELS[2], 2);
-    valve_add_button(bot_row, VALVE_BTN_LABELS[3], 3);
+    lv_obj_move_foreground(s_valve_diagram); /* float over the button grid */
 }
 
 static void valve_highlight_port(int port)
@@ -418,19 +444,20 @@ static void create_move_tab(lv_obj_t *parent)
  * reading its child label. ``user_data`` carries the modal pointer so
  * we can close it from the handler.
  */
-/* Port option list used by both source and sink dropdowns. Index 0 is
- * the literal "Port 1" entry → physical port 1; index 1 → port 3.
- * Order matters and must match ``dropdown_index_to_port`` below. */
-static const char PRIME_PORT_OPTIONS[] = "Port 1\nPort 3";
+/* Option list for both source and sink dropdowns — the four valve
+ * positions, in order, so dropdown index i ↔ valve position i+1
+ * (matching ``VALVE_POSITION_LABELS``). */
+static const char PRIME_PORT_OPTIONS[] =
+    "Port 1 to Path 1\nPort 3 to Path 1\nPort 1 to Path 2\nPort 3 to Path 2";
 
-static int dropdown_index_to_port(uint16_t idx)
+static int dropdown_index_to_position(uint16_t idx)
 {
-    return (idx == 0) ? 1 : 3;
+    return (int)idx + 1;
 }
 
-static uint16_t port_to_dropdown_index(int port)
+static uint16_t position_to_dropdown_index(int position)
 {
-    return (port == 1) ? 0 : 1;
+    return (uint16_t)(position - 1);
 }
 
 static void prime_button_label_refresh(void)
@@ -438,9 +465,29 @@ static void prime_button_label_refresh(void)
     if (s_prime_btn_label == NULL) {
         return;
     }
-    lv_label_set_text_fmt(s_prime_btn_label, "PRIME\n%d cycle%s,  Port %d → Port %d",
-                          s_prime_cycles, (s_prime_cycles == 1) ? "" : "s",
-                          s_prime_source, s_prime_sink);
+    lv_label_set_text_fmt(s_prime_btn_label, "START\n%d cycle%s",
+                          s_prime_cycles, (s_prime_cycles == 1) ? "" : "s");
+}
+
+static int prime_volume_uL(void)
+{
+    if (s_prime_volume_slider == NULL) {
+        return 0;
+    }
+    return (int)lv_slider_get_value(s_prime_volume_slider);
+}
+
+static void prime_volume_label_refresh(void)
+{
+    if (s_prime_volume_label != NULL) {
+        lv_label_set_text_fmt(s_prime_volume_label, "%d µL", prime_volume_uL());
+    }
+}
+
+static void prime_volume_changed_cb(lv_event_t *e)
+{
+    (void)e;
+    prime_volume_label_refresh();
 }
 
 static void prime_cycles_refresh(void)
@@ -472,45 +519,26 @@ static void prime_cycles_inc_cb(lv_event_t *e)
     prime_cycles_refresh();
 }
 
-/* Guard to break the source↔sink auto-link recursion: changing one
- * dropdown updates the other, which would re-enter this handler. */
-static bool s_prime_linking = false;
-
+/* Source and sink are now chosen independently from all four valve
+ * positions (no auto-pairing). The same-position case is rejected at
+ * START time in ``prime_btn_event_cb`` rather than by forcing a flip. */
 static void prime_source_changed_cb(lv_event_t *e)
 {
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED || s_prime_linking) {
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
         return;
     }
-    s_prime_source = dropdown_index_to_port(lv_dropdown_get_selected(
+    s_prime_source = dropdown_index_to_position(lv_dropdown_get_selected(
         (lv_obj_t *)lv_event_get_target(e)));
-    /* Auto-pair: only Port 1 and Port 3 are physically usable on MCC-4,
-     * so source != sink is enforced by always flipping the other side. */
-    int new_sink = (s_prime_source == 1) ? 3 : 1;
-    if (new_sink != s_prime_sink && s_prime_sink_dd != NULL) {
-        s_prime_linking = true;
-        s_prime_sink = new_sink;
-        lv_dropdown_set_selected(s_prime_sink_dd,
-                                 port_to_dropdown_index(s_prime_sink));
-        s_prime_linking = false;
-    }
     prime_button_label_refresh();
 }
 
 static void prime_sink_changed_cb(lv_event_t *e)
 {
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED || s_prime_linking) {
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
         return;
     }
-    s_prime_sink = dropdown_index_to_port(lv_dropdown_get_selected(
+    s_prime_sink = dropdown_index_to_position(lv_dropdown_get_selected(
         (lv_obj_t *)lv_event_get_target(e)));
-    int new_source = (s_prime_sink == 1) ? 3 : 1;
-    if (new_source != s_prime_source && s_prime_source_dd != NULL) {
-        s_prime_linking = true;
-        s_prime_source = new_source;
-        lv_dropdown_set_selected(s_prime_source_dd,
-                                 port_to_dropdown_index(s_prime_source));
-        s_prime_linking = false;
-    }
     prime_button_label_refresh();
 }
 
@@ -525,7 +553,8 @@ static void prime_button_cb(lv_event_t *e)
             .kind = PUMP_CMD_PRIME,
             .payload.prime = {.cycles = s_prime_cycles,
                               .source_port = s_prime_source,
-                              .sink_port = s_prime_sink},
+                              .sink_port = s_prime_sink,
+                              .volume_uL = (float)prime_volume_uL()},
         };
         enqueue_or_toast(&cmd, "Pump busy");
     }
@@ -537,21 +566,25 @@ static void prime_btn_event_cb(lv_event_t *e)
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
         return;
     }
-    /* Don't fire confirm if source == sink — same-port priming has no
-     * physical meaning (it'd just dispense back into the source). */
-    /* No same-port guard needed — the source/sink change handlers
-     * auto-flip the other side, so they're never equal in steady
-     * state. */
+    /* Same valve position for source and sink would aspirate and
+     * dispense through one physical port — fluid never reaches a
+     * different port. Reject it (this is the exact failure the 4-way
+     * selector fixes). */
+    if (s_prime_source == s_prime_sink) {
+        ui_show_toast("Source and sink must be different positions");
+        return;
+    }
     lv_obj_t *modal = lv_msgbox_create(NULL);
     lv_obj_set_style_text_font(modal, &s_font_main, LV_PART_MAIN);
-    lv_msgbox_add_title(modal, "Prime line");
-    char body[160];
+    lv_msgbox_add_title(modal, "Aspirate / Dispense");
+    char body[200];
     snprintf(body, sizeof(body),
-             "Run %d prime cycle%s:\n"
-             "Port %d (source) → Port %d (sink)\n"
-             "Each cycle = full-stroke aspirate + dispense.",
+             "Run %d cycle%s:\n"
+             "%s (source)\n→ %s (sink)\n"
+             "Each cycle = aspirate %d µL, then dispense to 0.",
              s_prime_cycles, (s_prime_cycles == 1) ? "" : "s",
-             s_prime_source, s_prime_sink);
+             VALVE_POSITION_LABELS[s_prime_source - 1],
+             VALVE_POSITION_LABELS[s_prime_sink - 1], prime_volume_uL());
     lv_msgbox_add_text(modal, body);
     lv_obj_t *start = lv_msgbox_add_footer_button(modal, "Start");
     lv_obj_t *cancel = lv_msgbox_add_footer_button(modal, "Cancel");
@@ -566,7 +599,10 @@ static void create_prime_tab(lv_obj_t *parent)
     lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(parent, 6, LV_PART_MAIN);
     lv_obj_set_style_pad_gap(parent, 4, LV_PART_MAIN);
-    lv_obj_set_scroll_dir(parent, LV_DIR_NONE);
+    /* Four input groups + action button is a tall stack; allow vertical
+     * scroll only (never horizontal) so the extra Target row can never
+     * clip the button off the bottom edge. */
+    lv_obj_set_scroll_dir(parent, LV_DIR_VER);
 
     /* Row 1: Cycles [ - ] N [ + ] */
     lv_obj_t *row_cycles = lv_obj_create(parent);
@@ -621,13 +657,13 @@ static void create_prime_tab(lv_obj_t *parent)
     s_prime_source_dd = lv_dropdown_create(row_src);
     lv_dropdown_set_options(s_prime_source_dd, PRIME_PORT_OPTIONS);
     lv_dropdown_set_selected(s_prime_source_dd,
-                             port_to_dropdown_index(s_prime_source));
+                             position_to_dropdown_index(s_prime_source));
     /* LV_SYMBOL_DOWN is a FontAwesome glyph (U+F078) carried by LVGL's
      * built-in lv_font_montserrat_14. Our custom subset doesn't include
      * it, but the font-fallback chain set in ``ui_create`` redirects
      * missing glyphs to that built-in font, so the caret renders. */
     lv_dropdown_set_symbol(s_prime_source_dd, LV_SYMBOL_DOWN);
-    lv_obj_set_width(s_prime_source_dd, 120);
+    lv_obj_set_flex_grow(s_prime_source_dd, 1); /* fill row — labels are wide */
     lv_obj_add_event_cb(s_prime_source_dd, prime_source_changed_cb,
                         LV_EVENT_VALUE_CHANGED, NULL);
 
@@ -649,13 +685,45 @@ static void create_prime_tab(lv_obj_t *parent)
     s_prime_sink_dd = lv_dropdown_create(row_sink);
     lv_dropdown_set_options(s_prime_sink_dd, PRIME_PORT_OPTIONS);
     lv_dropdown_set_selected(s_prime_sink_dd,
-                             port_to_dropdown_index(s_prime_sink));
+                             position_to_dropdown_index(s_prime_sink));
     lv_dropdown_set_symbol(s_prime_sink_dd, LV_SYMBOL_DOWN);
-    lv_obj_set_width(s_prime_sink_dd, 120);
+    lv_obj_set_flex_grow(s_prime_sink_dd, 1); /* fill row — labels are wide */
     lv_obj_add_event_cb(s_prime_sink_dd, prime_sink_changed_cb,
                         LV_EVENT_VALUE_CHANGED, NULL);
 
-    /* Row 4: PRIME button with dynamic label. */
+    /* Row 4: Target µL slider (per-cycle aspirate volume), mirroring the
+     * Move tab's Target bar: [ Target: ][ ====slider==== ][ N µL ]. */
+    lv_obj_t *row_vol = lv_obj_create(parent);
+    lv_obj_set_size(row_vol, LV_PCT(100), 36);
+    lv_obj_set_style_pad_all(row_vol, 0, LV_PART_MAIN);
+    lv_obj_set_style_border_width(row_vol, 0, LV_PART_MAIN);
+    lv_obj_set_layout(row_vol, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(row_vol, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row_vol, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row_vol, 6, LV_PART_MAIN);
+
+    lv_obj_t *vol_caption = lv_label_create(row_vol);
+    lv_label_set_text(vol_caption, "Target:");
+    lv_obj_set_width(vol_caption, 64);
+
+    s_prime_volume_slider = lv_slider_create(row_vol);
+    lv_slider_set_range(s_prime_volume_slider, 0, DEFAULT_SYRINGE_UL);
+    lv_slider_set_value(s_prime_volume_slider, DEFAULT_SYRINGE_UL, LV_ANIM_OFF);
+    lv_obj_set_flex_grow(s_prime_volume_slider, 1);
+    lv_obj_add_event_cb(s_prime_volume_slider, prime_volume_changed_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+
+    s_prime_volume_label = lv_label_create(row_vol);
+    /* Per-label font override so µ renders (theme default lacks U+00B5). */
+    lv_obj_set_style_text_font(s_prime_volume_label, &s_font_main,
+                               LV_PART_MAIN);
+    lv_obj_set_width(s_prime_volume_label, 58);
+    lv_obj_set_style_text_align(s_prime_volume_label, LV_TEXT_ALIGN_RIGHT,
+                                LV_PART_MAIN);
+    prime_volume_label_refresh();
+
+    /* Row 5: START button with dynamic label. */
     s_prime_btn = lv_btn_create(parent);
     lv_obj_set_size(s_prime_btn, LV_PCT(100), 64);
     s_prime_btn_label = lv_label_create(s_prime_btn);
@@ -762,6 +830,7 @@ static void apply_motion_enabled(bool enabled)
     set_disabled(s_move_slider, !enabled);
     set_disabled(s_move_actuate_btn, !enabled);
     set_disabled(s_prime_btn, !enabled);
+    set_disabled(s_prime_volume_slider, !enabled);
 }
 
 /* ----------------------------------------------------------------- ui_create
@@ -817,7 +886,7 @@ void ui_create(void)
 
     lv_obj_t *valve_tab = lv_tabview_add_tab(s_tabview, "Valve");
     lv_obj_t *move_tab = lv_tabview_add_tab(s_tabview, "Move");
-    lv_obj_t *prime_tab = lv_tabview_add_tab(s_tabview, "Prime");
+    lv_obj_t *prime_tab = lv_tabview_add_tab(s_tabview, "Asp/Disp");
     lv_obj_t *status_tab = lv_tabview_add_tab(s_tabview, "Status");
 
     create_valve_tab(valve_tab);
@@ -928,6 +997,17 @@ void ui_apply_motion_snapshot(const app_status_t *status)
             lv_label_set_text_fmt(s_move_target_label, "Target: %d µL", cur);
         }
     }
+    /* Same re-range for the Aspirate/Dispense per-cycle volume slider. */
+    if (s_prime_volume_slider != NULL && status->syringe_uL > 0.0f) {
+        int max_uL = (int)status->syringe_uL;
+        int cur = (int)lv_slider_get_value(s_prime_volume_slider);
+        if (cur > max_uL) {
+            cur = max_uL;
+        }
+        lv_slider_set_range(s_prime_volume_slider, 0, max_uL);
+        lv_slider_set_value(s_prime_volume_slider, cur, LV_ANIM_OFF);
+        prime_volume_label_refresh();
+    }
     /* Valve highlight from the cached server-reported port. */
     if (status->valve[0] >= '1' && status->valve[0] <= '4' &&
         status->valve[1] == '\0') {
@@ -937,7 +1017,7 @@ void ui_apply_motion_snapshot(const app_status_t *status)
     }
     /* Move tab — "Connected: Port N to Path M" mirrors the Valve tab
      * button labels so the operator sees the same wording in both
-     * tabs. Mapping per ``VALVE_BTN_LABELS`` in create_valve_tab. */
+     * tabs. Mapping per ``VALVE_POSITION_LABELS`` in create_valve_tab. */
     if (s_move_valve_label != NULL) {
         static const char *VALVE_CONNECTED_LABELS[4] = {
             "Connected: Port 1 to Path 1", /* valve = "1" */

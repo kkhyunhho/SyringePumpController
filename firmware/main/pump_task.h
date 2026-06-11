@@ -52,6 +52,7 @@ typedef struct {
             int cycles;
             int source_port;
             int sink_port;
+            float volume_uL; /**< per-cycle aspirate volume */
         } prime;
     } payload;
 } pump_cmd_t;

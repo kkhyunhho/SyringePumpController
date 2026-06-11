@@ -372,12 +372,14 @@ esp_err_t pump_move_steps(int steps, pump_motion_result_t *out,
 }
 
 esp_err_t pump_prime(int cycles, int source_port, int sink_port,
-                     pump_prime_result_t *out, pump_error_t *err)
+                     float volume_uL, pump_prime_result_t *out,
+                     pump_error_t *err)
 {
     char body[MAX_BODY_LEN];
     snprintf(body, sizeof(body),
-             "{\"cycles\":%d,\"source_port\":%d,\"sink_port\":%d}", cycles,
-             source_port, sink_port);
+             "{\"cycles\":%d,\"source_port\":%d,"
+             "\"sink_port\":%d,\"volume_uL\":%.3f}",
+             cycles, source_port, sink_port, volume_uL);
 
     /* Prime is the only long-running endpoint — a full cycle is
      * ~30 s (two full strokes + two valve moves), and the operator

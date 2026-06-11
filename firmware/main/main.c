@@ -322,7 +322,8 @@ static void handle_prime(const pump_cmd_t *cmd)
     pump_error_t err;
     esp_err_t rc =
         pump_prime(cmd->payload.prime.cycles, cmd->payload.prime.source_port,
-                   cmd->payload.prime.sink_port, &res, &err);
+                   cmd->payload.prime.sink_port, cmd->payload.prime.volume_uL,
+                   &res, &err);
     if (rc == ESP_OK) {
         state_update_status(res.final_valve, res.final_plunger, false, "OK", 0);
         state_set_ready();

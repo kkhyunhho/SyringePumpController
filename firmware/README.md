@@ -5,8 +5,10 @@ the [server/](../server/) FastAPI bridge.
 
 **Phase C (this folder ships):** full motion UI. Boot → WiFi →
 diagnose → user-driven Initialize → READY ⇄ BUSY. Valve tab, Move
-tab (slider 0–125 µL + Aspirate / Dispense), Prime tab (port 3 →
-port 1, one cycle), Status tab (2 s refresh). Error modals
+tab (slider 0–125 µL + Aspirate / Dispense), Asp/Disp tab
+(cycles + source/sink valve positions [Port n to Path m, the same
+4-way set as the Valve tab] + per-cycle Target µL slider), Status
+tab (2 s refresh). Error modals
 (recoverable: Retry / Dismiss; fatal: Re-initialize) with
 `requires_reinit` latch on `PlungerOverloadError` /
 `InitFailedError`. Single-in-flight `pump_task` consumes a
@@ -61,6 +63,22 @@ idf.py -p /dev/ttyACM0 flash monitor   # adjust port to your dev kit
 First build pulls managed components and writes `dependencies.lock`;
 commit that file in a follow-up once the build is reproducible on the
 bench machine.
+
+### No `/dev/ttyACM0`? (containers without udev)
+
+On a dev host with no udev (e.g. inside the container), plugging in or
+resetting the BOX-3 enumerates its USB-Serial/JTAG interface in sysfs
+but never creates the `/dev` node `idf.py flash` needs — flash then
+fails with *"Could not open /dev/ttyACM0 … No such file or directory"*.
+Run the helper to (re)create it from the kernel-assigned major:minor:
+
+```bash
+sudo firmware/acm_node.sh        # finds the Espressif (303a) ACM tty, mknod's /dev/ttyACMn
+```
+
+It is idempotent and reads the live USB topology each run, so it works
+even after the port index changes between replugs. The node is **not**
+persistent — re-run after every unplug/reset.
 
 ## Runtime behaviour
 

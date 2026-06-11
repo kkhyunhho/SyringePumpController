@@ -99,6 +99,7 @@ esp_err_t pump_dispense(float target_uL, pump_motion_result_t *out,
 esp_err_t pump_move_steps(int steps, pump_motion_result_t *out,
                           pump_error_t *err);
 
-/** POST /v1/prime {cycles, source_port, sink_port}. */
+/** POST /v1/prime {cycles, source_port, sink_port, volume_uL}. */
 esp_err_t pump_prime(int cycles, int source_port, int sink_port,
-                     pump_prime_result_t *out, pump_error_t *err);
+                     float volume_uL, pump_prime_result_t *out,
+                     pump_error_t *err);
