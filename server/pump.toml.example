@@ -1,9 +1,12 @@
 # sy01b-server config — copy to server/pump.toml and edit for your bench.
 
 [pump]
-# CH340 USB-RS232 dongle. Prefer the by-id udev path so it survives
-# reboots in arrival-order /dev/ttyUSB* enumeration. See DESIGN.md §4.1.
-port = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+# CH340 USB-RS232 dongle, matched by USB identity so it survives a
+# /dev/ttyUSB* renumber or a different USB socket. The SY-01B's CH340
+# exposes no serial number, so VID:PID alone is used (it is the only
+# CH340 on the bench). If two identical dongles ever coexist and expose
+# serials, pin one with "VID:PID:SERIAL". See DESIGN.md §4.1.
+port = "1A86:7523"
 address = 1
 baud = 9600
 syringe_uL = 125

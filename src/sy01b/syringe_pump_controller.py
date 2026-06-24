@@ -31,6 +31,7 @@ from types import TracebackType
 from typing import ClassVar, Protocol, Self
 
 import serial
+import serial.tools.list_ports
 
 logger = logging.getLogger("sy01b")
 
@@ -39,6 +40,68 @@ def _hex_preview(data: bytes, limit: int = 64) -> str:
     if len(data) <= limit:
         return data.hex()
     return data[:limit].hex() + f"... ({len(data)} bytes total)"
+
+
+def _resolve_port(spec: str) -> str:
+    """Resolve a port spec to a concrete device path.
+
+    ``spec`` is one of:
+
+    - an explicit device path (contains ``/`` or starts with ``COM``);
+    - a USB ``"VID:PID"`` hex string (e.g. ``"1A86:7523"`` for the
+      SY-01B's CH340), matched against attached serial ports at runtime;
+    - a USB ``"VID:PID:SERIAL"`` string that additionally pins one
+      specific unit by its USB serial number, for when two devices share
+      the same VID:PID (e.g. two identical dongles).
+
+    Matching by USB identity keeps the pump addressable after a
+    ``/dev/ttyUSB*`` renumber or a move to a different USB socket. Use the
+    serial form only when the device actually exposes a unique serial —
+    cheap CH340 chips report ``None``, so the SY-01B is matched by VID:PID
+    alone (it is the only CH340 on the bench).
+
+    Args:
+        spec: The configured port value (device path, ``"VID:PID"``, or
+            ``"VID:PID:SERIAL"``).
+
+    Returns:
+        The concrete device path to hand to ``serial.Serial``.
+
+    Raises:
+        ValueError: ``spec`` is neither a path nor valid USB-identity hex.
+        RuntimeError: the spec matched zero or several devices.
+    """
+    if "/" in spec or spec.upper().startswith("COM"):
+        return spec
+    parts = spec.split(":")
+    serial_number: str | None = None
+    try:
+        if len(parts) == 2:
+            vid, pid = int(parts[0], 16), int(parts[1], 16)
+        elif len(parts) == 3:
+            vid, pid = int(parts[0], 16), int(parts[1], 16)
+            serial_number = parts[2]
+        else:
+            raise ValueError
+    except ValueError as exc:
+        raise ValueError(
+            f"port {spec!r} is neither a device path nor VID:PID[:SERIAL] hex"
+        ) from exc
+    matches = [
+        info.device
+        for info in serial.tools.list_ports.comports()
+        if info.vid == vid
+        and info.pid == pid
+        and (serial_number is None or info.serial_number == serial_number)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise RuntimeError(f"no serial device matches {spec}")
+    raise RuntimeError(
+        f"{spec} matches several devices {matches} — add the USB serial "
+        "(VID:PID:SERIAL) or use an explicit device path"
+    )
 
 
 class SyringePumpController:
@@ -349,8 +412,9 @@ class SyringePumpController:
 
     @classmethod
     def open(cls, cfg: SyringePumpController.Config) -> Self:
+        device = _resolve_port(cfg.port)
         port = serial.Serial(
-            port=cfg.port,
+            port=device,
             baudrate=cfg.baud,
             bytesize=serial.EIGHTBITS,
             parity=serial.PARITY_NONE,
@@ -364,7 +428,10 @@ class SyringePumpController:
         port.dtr = False
         port.rts = False
         logger.debug(
-            "opened %s @ %d 8N1 (DTR/RTS forced low)", cfg.port, cfg.baud
+            "opened %s (%s) @ %d 8N1 (DTR/RTS forced low)",
+            device,
+            cfg.port,
+            cfg.baud,
         )
         return cls(transport=port, config=cfg)
 

@@ -6,7 +6,7 @@ Companion to [CLAUDE.md](CLAUDE.md) (protocol/hardware reference) and [DESIGN.md
 
 ## Status
 
-Pre-alpha (`0.2.0.dev0`). The following surfaces are shipped and HIL-verified on `/dev/ttyUSB1` (firmware `8.33`, serial `32656`, 125 µL syringe):
+Pre-alpha (`0.2.0.dev0`). The following surfaces are shipped and HIL-verified on the CH340 dongle (USB identity `1A86:7523`, firmware `8.33`, serial `32656`, 125 µL syringe):
 
 - **Read-only commissioning** — `diagnose()`, identity / status / voltage / valve / plunger queries, `sy01b-diagnose` CLI.
 - **Valve motion** — `initialize_valve`, `set_valve_position`, `move_valve_to_port`.
@@ -23,7 +23,7 @@ The SY-01B is a programmable precision dispenser. A stepper-driven **plunger** m
 Before plugging anything in:
 
 - **Power:** 24 V DC, ≥ 1.5 A on the DB-15 header. Never connect or disconnect the pump while powered.
-- **Serial:** default 9600 bps, 8N1. The EUSB-30 dongle enumerates as `/dev/ttyUSB0` or `/dev/ttyUSB1` on Linux.
+- **Serial:** default 9600 bps, 8N1. The EUSB-30 (CH340) dongle enumerates as `/dev/ttyUSB*` on Linux; identify it by USB identity `1A86:7523` rather than the arrival-order index (see "Finding the serial port").
 - **Address switch:** 16-position rotary (0–F) on the pump body sets the bus ID — position 0 → address `1`, position 1 → `2`, …, position E → `15`. Must be set **before** power-on. Position F is self-test.
 - **Syringe size:** declare the installed syringe volume (µL) in code (`Config.syringe_uL`). Stall current must already match this size at the firmware level — set it once via a terminal session with `/1U200,<n>R` per the table in [CLAUDE.md](CLAUDE.md) before running this driver.
 - **Diagnose first, move second.** The `diagnose()` API and `sy01b-diagnose` CLI never emit `R`/`Z`/`Y`/`W` — they verify wiring, address, voltage, and identity without moving anything. Run this before any motion code.
@@ -121,7 +121,12 @@ python3 -m venv .venv
 
 ## Finding the serial port
 
+The driver resolves the port by USB identity, so prefer the `VID:PID`
+form (`"1A86:7523"`) over a `/dev/ttyUSB*` index, which renumbers across
+reboots and USB re-plugs. To list attached USB serial devices:
+
 ```bash
+.venv/bin/python -m serial.tools.list_ports -v   # shows VID:PID per port
 ls -l /dev/ttyUSB*
 # If absent, check kernel logs for the CH340 attach:
 dmesg | tail
@@ -136,7 +141,7 @@ The safest first action: verify wiring, voltage, and identity without moving any
 ### CLI
 
 ```bash
-.venv/bin/sy01b-diagnose --port /dev/ttyUSB1 --address 1 --syringe-uL 125
+.venv/bin/sy01b-diagnose --port 1A86:7523 --address 1 --syringe-uL 125
 ```
 
 Successful output (bench pump, 2026-05-18):
@@ -161,7 +166,7 @@ SY-01B diagnostic report
 from sy01b import SyringePumpController
 
 cfg = SyringePumpController.Config(
-    port="/dev/ttyUSB1",
+    port="1A86:7523",  # USB VID:PID — survives /dev renumber; an explicit path also works
     address=1,
     syringe_uL=125,
 )
@@ -215,10 +220,10 @@ Everything is reachable from a single import: `from sy01b import SyringePumpCont
 **Other**
 - `wait_until_ready()` — `Q`-polling with backoff. Retained for parity with the manual; unreliable on firmware 8.33 (LearnedPatterns E5).
 
-**Remote HTTP bridge** (Phase A of the ESP32 controller initiative, [#10](https://github.com/coport-uni/SyringePumpController/issues/10))
+**Remote HTTP bridge** (Phase A of the ESP32 controller initiative, [#10](https://github.com/kkhyunhho/SyringePumpController/issues/10))
 - [server/](server/) — thin FastAPI bridge exposing the driver over `/v1/*` JSON for a remote ESP32-S3 client. Run `sy01b-server --config server/pump.toml` (binds `0.0.0.0:17046`, host PC LAN IP `192.168.1.129` on this bench). Single uvicorn worker + `asyncio.Lock` preserves the driver's single-in-flight contract; long ops (prime ~30 s) block the issuing request. See [server/README.md](server/README.md) for endpoint catalog and error mapping.
 
-**ESP32-S3 client firmware** (Phases B + C of the ESP32 controller initiative, [#12](https://github.com/coport-uni/SyringePumpController/issues/12) + [#15](https://github.com/coport-uni/SyringePumpController/issues/15))
+**ESP32-S3 client firmware** (Phases B + C of the ESP32 controller initiative, [#12](https://github.com/kkhyunhho/SyringePumpController/issues/12) + [#15](https://github.com/kkhyunhho/SyringePumpController/issues/15))
 - [firmware/](firmware/) — ESP-IDF v5.3+ project (verified through v6.0.1) for the ESP32-S3-BOX-3 (LVGL touch dashboard). All four tabs live: **Valve** (Port 1–4 buttons), **Move** (slider 0–125 µL + Aspirate / Dispense to absolute target), **Prime** (port 3 → port 1 single-cycle), **Status** (2 s refresh). FSM gates motion behind `NEEDS_INIT → READY`; `PlungerOverloadError` / `InitFailedError` flip the `requires_reinit` latch and require an explicit Re-initialize. Managed components pinned at `espressif/esp-box-3 ^3.2` (transitively LVGL 9.5) + `espressif/cjson ^1.7`; `ui.c` targets the LVGL 9.x msgbox / spinner APIs. Build / flash recipe, the `CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288` requirement, and the boot-order dependency (server up before ESP32) are in [firmware/README.md](firmware/README.md).
 
 ## What's not yet implemented
@@ -229,11 +234,11 @@ The remaining plunger-side surface (see [ToDo.md §6](ToDo.md)):
 - `set_step_mode(mode)` — `N0`/`N1`/`N2` configuration.
 - `raw(cmds)` — escape hatch for commands not modelled above.
 
-Read-only HIL identity probes (`claude_test/hil_smoke.md`, `hil_identity.py`) are tracked in [#4](https://github.com/coport-uni/SyringePumpController/issues/4); doc hygiene (`claude_test/repl_session.md`, `CHANGELOG.md`) in [#5](https://github.com/coport-uni/SyringePumpController/issues/5).
+Read-only HIL identity probes (`claude_test/hil_smoke.md`, `hil_identity.py`) are tracked in [#4](https://github.com/kkhyunhho/SyringePumpController/issues/4); doc hygiene (`claude_test/repl_session.md`, `CHANGELOG.md`) in [#5](https://github.com/kkhyunhho/SyringePumpController/issues/5).
 
 ## Bench scripts
 
-[claude_test/](claude_test/) holds debug and bench-verification scripts that drive real hardware (per [CommonClaude §3](https://github.com/coport-uni/CommonClaude/blob/main/CLAUDE.md)). They are **not** part of CI — production unit tests live in [tests/](tests/). The index with HIL findings is in [claude_test/README.md](claude_test/README.md).
+[claude_test/](claude_test/) holds debug and bench-verification scripts that drive real hardware (per the CommonClaude debug-file rule). They are **not** part of CI — production unit tests live in [tests/](tests/). The index with HIL findings is in [claude_test/README.md](claude_test/README.md).
 
 | Script | Purpose |
 |---|---|
@@ -250,4 +255,4 @@ Read-only HIL identity probes (`claude_test/hil_smoke.md`, `hil_identity.py`) ar
 .venv/bin/pytest --cov=sy01b --cov=server --cov-report=term-missing
 ```
 
-Bench-learned lessons are collected in [LearnedPatterns.md](LearnedPatterns.md). Workflow conventions (claude_test/ vs tests/, CommonClaude inheritance, ToDo + GitHub-issue policy) are in [CLAUDE.md](CLAUDE.md).
+Bench-learned lessons are collected in [LearnedPatterns.md](LearnedPatterns.md). Workflow conventions (claude_test/ vs tests/, CommonClaude reference, ToDo + GitHub-issue policy) are in [CLAUDE.md](CLAUDE.md).

@@ -1,7 +1,9 @@
 """End-to-end demo of every SyringePumpController operation in one script.
 
-Hardware assumption: 125 µL syringe at address 1 on /dev/ttyUSB1, 4-way
-distribution valve (firmware 8.33). The syringe must be **empty** and
+Hardware assumption: 125 µL syringe at address 1 on the CH340 dongle
+(USB VID:PID 1A86:7523), 4-way distribution valve (firmware 8.33). The
+port is resolved by USB identity, so it survives a /dev/ttyUSB* renumber
+or a move to a different USB socket. The syringe must be **empty** and
 fluid lines open to atmosphere — the plunger moves through its full
 stroke and the valve homes / toggles between ports.
 
@@ -51,7 +53,7 @@ def main() -> int:
     )
 
     cfg = SyringePumpController.Config(
-        port="/dev/ttyUSB1",
+        port="1A86:7523",
         address=1,
         baud=9600,
         syringe_uL=125,

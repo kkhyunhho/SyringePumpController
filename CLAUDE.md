@@ -2,40 +2,28 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Authority order
+## Conventions
 
-This project inherits from [coport-uni/CommonClaude/CLAUDE.md](https://github.com/coport-uni/CommonClaude/blob/2a8a597ec93132ef401b6f0e446255b6f65e5424/CLAUDE.md) (pinned at upstream commit `2a8a597`, 2026-05-19; previous pin `898ecf3`, 2026-05-18). **CommonClaude takes precedence** over anything in this file when the two conflict — the inverse of CommonClaude's own §1 "Rule Priority". This override was set by the project owner on 2026-05-18 (see ToDo.md §15 and issue #1) and the pin was advanced on 2026-05-21 (see ToDo.md §18 and issue #6).
+For the big picture and all shared conventions — the "one cell, many
+devices" architecture, code style, repo skeleton, codename naming, the
+driver API contract, the FastAPI `/v1` server standard, the hybrid
+integration model, testing strategy, and task/commit rules — see
+**CommonClaude** (`kkhyunhho/CommonClaude`), the single source of truth.
 
-Operational implications, in order of priority:
+This file holds only what is specific to **SyringePumpController**: the
+SY-01B hardware, its protocol and command set, the error model, and this
+project's build/test commands and commit boundaries. Where this file is
+silent, CommonClaude governs.
 
-1. **CommonClaude/CLAUDE.md §1 Rule Priority** — local CLAUDE.md sections below override upstream when the two conflict (this is the project's documented inversion of upstream §1).
-2. **CommonClaude/CLAUDE.md §2 MIT Code Convention** — applies to any C code in the repo (none today); Python code is governed by the equivalent specialization in the "Build, lint, test" section below (ruff line-length 80, ruff format, mypy strict).
-3. **CommonClaude/CLAUDE.md §3 Debug File Management** — bench scripts live in [claude_test/](claude_test/) (production tests live in [tests/](tests/)); [claude_test/README.md](claude_test/README.md) indexes the directory.
-4. **CommonClaude/CLAUDE.md §4 Task Management** — every task gets a `ToDo.md` append + `gh issue create` + working branch + PR. Read-only diagnose sessions are exempt per LearnedPatterns/W1.
-5. **CommonClaude/CLAUDE.md §5 Testing Rules** — no magic numbers, no hardcoding to match test inputs; quality first.
-6. **CommonClaude/CLAUDE.md §6 Linting** — `clang-format` / `cppcheck` for C; Python code uses the ruff/mypy specialization in "Build, lint, test" below.
-7. **CommonClaude/CLAUDE.md §7 Research Before Coding** — consult docs/repo before guessing at unfamiliar APIs.
-8. **CommonClaude/CLAUDE.md §8 Exceptions** — `claude_test/` is exempt from the 80-column limit and Doxygen blocks; ToDo.md checkbox flips are exempt from the append-only rule.
-9. **CommonClaude/CLAUDE.md §9 Learned Patterns Reference** — consult [LearnedPatterns.md](LearnedPatterns.md) before drafting ToDo entries; cite as `(see LP §X)`; append new patterns post-task.
-10. **CommonClaude/CLAUDE.md §10 Learned Patterns Bootstrap** — bootstrap has exited (the file exists). New entries use Problem / Cause / Fix / Rule. Grandfathered entries (G1–G6, Q1, W1–W6, E1–E4) retain their original format.
-11. **CommonClaude/CLAUDE.md §11 Commit Messages** — Conventional Commits (`<type>(<scope>): <description>`, imperative mood, no trailing period). English only.
-12. **CommonClaude/CLAUDE.md §12 Branching Strategy** — GitHub Flow; branches named `<type>/<short-description>` cut from `main`; deleted after merge.
-13. **CommonClaude/CLAUDE.md §13 .gitignore** — base template is C-focused upstream; Python `.gitignore` in this repo is the language specialization.
-14. **CommonClaude/CLAUDE.md §14 Versioning** — Semantic Versioning. Currently `0.2.0.dev0` — initial development; public API is unstable until `1.0.0`.
-15. **CommonClaude/CLAUDE.md §15 Pull Request Guidelines** — PR title uses Conventional Commits format; description follows the Changes / Why / Testing / Related Issues template; keep PRs under 400 lines when possible.
-16. **CommonClaude/CLAUDE.md §16 Git Automation** — `pre-commit` is documented but not currently installed in this repo; tracked as a future ToDo candidate.
-17. **CommonClaude/CLAUDE.md §17 References** — primary specs (Conventional Commits, GitHub Flow, SemVer, .gitignore templates, pre-commit) are linked upstream.
-18. **CommonClaude/LearnedPatterns.md format** — referenced from §10 above; project's local LP is independently scoped to SY-01B hardware specifics, not a mirror of upstream LP content.
-19. **Hardware-specific rules in this file** (sections below) — the SY-01B protocol, error model, build/lint/test commands, and commit boundaries. These do not conflict with CommonClaude; they specialize it per §1 above.
-
-Explicit project waivers from CommonClaude (must be cited when used):
-- *(none — full compliance with CommonClaude as of issue #6, commit pin `2a8a597`)*
-
-Upstream §2 (C naming) and §6 (clang-format/cppcheck) apply to any C code in the repo; Python code is governed by the equivalent specializations in the "Build, lint, test" block below (ruff, ruff format, mypy). This is **specialization**, not waiver — the upstream rule remains in force for any future C file.
+This project is a **device driver** for the codename **`sy01b`**: package
+[src/sy01b/](src/sy01b/), class `SyringePumpController`, console scripts
+`sy01b-diagnose` / `sy01b-server`. It is the reference implementation of
+the CommonClaude standard — the FastAPI `/v1` server pattern is extracted
+from [server/](server/).
 
 ## Repository status
 
-Active development (`0.2.0.dev0`, pre-alpha). The driver lives at [src/sy01b/](src/sy01b/) as a single `SyringePumpController` class (consolidation §14); read-only commissioning + valve motion + plunger init + step moves + µL volume API are shipped and HIL-verified on `/dev/ttyUSB1`. Production unit tests live in [tests/](tests/) (121 tests, ~0.1 s); bench scripts that drive real hardware live in [claude_test/](claude_test/) per CommonClaude §3. See [README.md](README.md) for the current API surface, [DESIGN.md](DESIGN.md) for the architecture, and [ToDo.md](ToDo.md) for outstanding work.
+Active development (`0.2.0.dev0`, pre-alpha). The driver lives at [src/sy01b/](src/sy01b/) as a single `SyringePumpController` class (consolidation §14); read-only commissioning + valve motion + plunger init + step moves + µL volume API are shipped and HIL-verified. The pump's port is resolved by USB identity (CH340 VID:PID `1A86:7523`), so it survives a `/dev/ttyUSB*` renumber or a different USB socket; pass `port="1A86:7523"` (or an explicit path). Production unit tests live in [tests/](tests/) (128 tests, ~0.1 s); bench scripts that drive real hardware live in [claude_test/](claude_test/). See [README.md](README.md) for the current API surface, [DESIGN.md](DESIGN.md) for the architecture, and [ToDo.md](ToDo.md) for outstanding work.
 
 ## What this project will control
 
@@ -129,7 +117,7 @@ python3 -m venv .venv
 .venv/bin/ruff check src tests claude_test main.py          # lint
 .venv/bin/ruff format --check src tests claude_test main.py # format check
 .venv/bin/mypy                                              # strict types on src/sy01b
-.venv/bin/pytest                                            # full suite (103 tests)
+.venv/bin/pytest                                            # full suite (128 tests)
 .venv/bin/pytest tests/test_protocol.py::TestBuildCommand::test_plunger_init_frames  # single test
 .venv/bin/pytest --cov=sy01b --cov-report=term-missing      # with coverage
 ```

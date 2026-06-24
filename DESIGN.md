@@ -95,7 +95,7 @@ The EUSB-30 dongle ships with a **WCH CH340** USB-to-serial chip (USB VID:PID `1
 - **Latency.** CH340 has a hard-coded ~16 ms USB poll interval in many firmware revisions. Round-trip for a single ASCII frame floors around 20–30 ms regardless of how fast the host writes. This is why the reply-deadline default in §4 is 1 s rather than 10 ms: small, but enough headroom that we never falsely time out on a healthy line.
 - **DTR/RTS quirk.** CH340 toggles DTR low on `open()` on most Linux drivers. The pump ignores these lines, but if the dongle's RS-232 DIP is mis-wired (e.g., RTS bridged to a logic input), an open could glitch a peripheral. The controller opens with `dsrdtr=False, rtscts=False` and explicitly drops both control lines after open. Documented as a TODO to revisit if a customer reports a glitch on open.
 - **Flow control.** None — the pump speaks half-duplex framed text, not flowed bytestream. Both XON/XOFF and RTS/CTS stay off.
-- **Identification on multi-port hosts.** A bench with several CH340 dongles enumerates them in arrival order, not by physical port, so `/dev/ttyUSB0` is not stable across reboots. The config accepts a `port` field but the diagnostic flow (§7) also accepts a `by-id` udev path (`/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`) which *is* stable. The README example uses the by-id form.
+- **Identification on multi-port hosts.** A bench with several CH340 dongles enumerates them in arrival order, not by physical port, so `/dev/ttyUSB0` is not stable across reboots. The `Config.port` field therefore accepts a USB-identity spec — `"VID:PID"` (e.g. `"1A86:7523"`) or `"VID:PID:SERIAL"` — resolved at runtime by `_resolve_port` against `serial.tools.list_ports`, in addition to an explicit device path. VID:PID is preferred for this bench's single CH340 (the chip exposes no serial number, so VID:PID alone pins it); use the serial form only when two devices share a VID:PID and expose distinct serials. An explicit `/dev/...` path still works as an override.
 
 ## 5. Protocol layer
 
@@ -113,7 +113,7 @@ Command *builders* live here as thin string helpers (`abs_move(n) -> "A{n}"`, `v
 from sy01b import SyringePumpController
 
 cfg = SyringePumpController.Config(
-    port="/dev/ttyUSB1", address=1, syringe_uL=125,
+    port="1A86:7523", address=1, syringe_uL=125,
     step_mode=SyringePumpController.StepMode.NORMAL,
 )
 with SyringePumpController.open(cfg) as pump:
