@@ -110,16 +110,18 @@ To regenerate the `.txt` files: `pdftotext -layout <file>.pdf` (requires `popple
 
 Stack: **Python ≥ 3.12**, **pyserial 3.x**, **DT ASCII protocol** (locked — never emit OEM frames from this codebase; the firmware locks to the first variant per power cycle). Architecture and rationale are in [DESIGN.md](DESIGN.md).
 
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
+All projects share one conda env, **`elec`** (Python 3.12), where every
+driver package is `pip install -e`'d. New terminals activate it.
 
-.venv/bin/ruff check src tests claude_test main.py          # lint
-.venv/bin/ruff format --check src tests claude_test main.py # format check
-.venv/bin/mypy                                              # strict types on src/sy01b
-.venv/bin/pytest                                            # full suite (128 tests)
-.venv/bin/pytest tests/test_protocol.py::TestBuildCommand::test_plunger_init_frames  # single test
-.venv/bin/pytest --cov=sy01b --cov-report=term-missing      # with coverage
+```bash
+conda activate elec          # one-time: pip install -e ".[dev,server]"
+
+ruff check src tests claude_test main.py          # lint
+ruff format --check src tests claude_test main.py # format check
+mypy                                              # strict types on src/sy01b
+pytest                                            # full suite (128 tests)
+pytest tests/test_protocol.py::TestBuildCommand::test_plunger_init_frames  # single test
+pytest --cov=sy01b --cov-report=term-missing      # with coverage
 ```
 
 The CLI is installed as `sy01b-diagnose` — a read-only commissioning probe. Run with `--help` for usage. It **never** sends `R`, `Z`, `Y`, or `W` (enforced by the test suite, not just convention).
