@@ -112,11 +112,12 @@ Each code maps to a subclass of `SyringePumpController.Error` (`InitFailedError`
 
 ## Install
 
-Requires Python ≥ 3.12.
+Requires Python ≥ 3.12. All projects share one conda env, **`elec`**
+(new terminals activate it); install this package editable into it:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
+conda activate elec
+pip install -e ".[dev,server]"
 ```
 
 ## Finding the serial port
@@ -126,7 +127,7 @@ form (`"1A86:7523"`) over a `/dev/ttyUSB*` index, which renumbers across
 reboots and USB re-plugs. To list attached USB serial devices:
 
 ```bash
-.venv/bin/python -m serial.tools.list_ports -v   # shows VID:PID per port
+python -m serial.tools.list_ports -v   # shows VID:PID per port
 ls -l /dev/ttyUSB*
 # If absent, check kernel logs for the CH340 attach:
 dmesg | tail
@@ -141,7 +142,7 @@ The safest first action: verify wiring, voltage, and identity without moving any
 ### CLI
 
 ```bash
-.venv/bin/sy01b-diagnose --port 1A86:7523 --address 1 --syringe-uL 125
+sy01b-diagnose --port 1A86:7523 --address 1 --syringe-uL 125
 ```
 
 Successful output (bench pump, 2026-05-18):
@@ -248,11 +249,12 @@ Read-only HIL identity probes (`claude_test/hil_smoke.md`, `hil_identity.py`) ar
 ## Develop
 
 ```bash
-.venv/bin/ruff check src tests claude_test server main.py            # lint
-.venv/bin/ruff format --check src tests claude_test server main.py   # format check
-.venv/bin/mypy                                                       # strict types on src/sy01b + server
-.venv/bin/pytest                                                     # full suite (145 unit tests, incl. tests/server/)
-.venv/bin/pytest --cov=sy01b --cov=server --cov-report=term-missing
+conda activate elec                                       # shared env
+ruff check src tests claude_test server main.py            # lint
+ruff format --check src tests claude_test server main.py   # format check
+mypy                                                       # strict types on src/sy01b + server
+pytest                                                     # full suite (incl. tests/server/)
+pytest --cov=sy01b --cov=server --cov-report=term-missing
 ```
 
 Bench-learned lessons are collected in [LearnedPatterns.md](LearnedPatterns.md). Workflow conventions (claude_test/ vs tests/, CommonClaude reference, ToDo + GitHub-issue policy) are in [CLAUDE.md](CLAUDE.md).
