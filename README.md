@@ -239,7 +239,7 @@ Read-only HIL identity probes (`claude_test/hil_smoke.md`, `hil_identity.py`) ar
 
 ## Bench scripts
 
-[claude_test/](claude_test/) holds debug and bench-verification scripts that drive real hardware (per the CommonClaude debug-file rule). They are **not** part of CI — production unit tests live in [tests/](tests/). The index with HIL findings is in [claude_test/README.md](claude_test/README.md).
+[claude_test/](claude_test/) holds debug and bench-verification scripts that drive real hardware (per the SDLClaude debug-file rule). They are **not** part of CI — production unit tests live in [tests/](tests/). The index with HIL findings is in [claude_test/README.md](claude_test/README.md).
 
 | Script | Purpose |
 |---|---|
@@ -257,4 +257,4 @@ pytest                                                     # full suite (incl. t
 pytest --cov=sy01b --cov=server --cov-report=term-missing
 ```
 
-Bench-learned lessons are collected in [LearnedPatterns.md](LearnedPatterns.md). Workflow conventions (claude_test/ vs tests/, CommonClaude reference, ToDo + GitHub-issue policy) are in [CLAUDE.md](CLAUDE.md).
+Bench-learned lessons are collected in [LearnedPatterns.md](LearnedPatterns.md). Workflow conventions (claude_test/ vs tests/, SDLClaude reference, ToDo + GitHub-issue policy) are in [CLAUDE.md](CLAUDE.md).

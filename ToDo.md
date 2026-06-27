@@ -104,7 +104,7 @@ Implementation checklist for the SY-01B controller. Derived from [DESIGN.md](DES
 - [x] Update [CLAUDE.md](CLAUDE.md) §"Build, lint, test": filled in actual invocations; removed DT-vs-OEM placeholder (we chose DT)
 - [ ] Move §11 open questions from DESIGN.md to GitHub issues once the first one needs an answer
 - [ ] Add a `CHANGELOG.md` at the first tagged release
-- [x] Append to [LearnedPatterns.md](LearnedPatterns.md) as each ToDo item completes — categorized lessons (R/G/Q/W/E prefixes per §1–5), provenance `(from ToDo#N)`. Format mirrors https://github.com/coport-uni/CommonClaude/blob/main/LearnedPatterns.md
+- [x] Append to [LearnedPatterns.md](LearnedPatterns.md) as each ToDo item completes — categorized lessons (R/G/Q/W/E prefixes per §1–5), provenance `(from ToDo#N)`. Format mirrors https://github.com/coport-uni/SDLClaude/blob/main/LearnedPatterns.md
 
 ## 14. Refactors after consolidation
 
@@ -116,17 +116,17 @@ Implementation checklist for the SY-01B controller. Derived from [DESIGN.md](DES
 - [ ] **Path C** (defer): re-introduce concrete `_DTSerialTransport` nested class + restore fake-pump unit tests. Revisit only if motion-method iteration cycles prove impractical against real hardware.
 - [ ] **Path D** (avoid): full un-consolidation back to 6 modules. Only if requirements double.
 
-## 15. CommonClaude reconciliation (2026-05-18)
+## 15. SDLClaude reconciliation (2026-05-18)
 
-User direction: inherit from [coport-uni/CommonClaude](https://github.com/coport-uni/CommonClaude) and let CommonClaude take precedence over project-specific conventions when they conflict (inverts CommonClaude §1).
+User direction: inherit from [coport-uni/SDLClaude](https://github.com/coport-uni/SDLClaude) and let SDLClaude take precedence over project-specific conventions when they conflict (inverts SDLClaude §1).
 
-- [x] Project [CLAUDE.md](CLAUDE.md): top-level statement that the project inherits CommonClaude/CLAUDE.md and CommonClaude wins in conflicts.
-- [x] [pyproject.toml](pyproject.toml): `line-length = 100` → `80` (CommonClaude §6).
-- [x] `examples/` → `claude_test/` rename with index README per CommonClaude §3. Update references in CLAUDE.md, ToDo.md, LearnedPatterns.md.
-- [x] Reformat new [LearnedPatterns.md](LearnedPatterns.md) entries E5/E6 from `Note/Rule` to `Problem/Cause/Fix/Rule` per CommonClaude §10. Provenance changed to `(from ToDo#6)`.
+- [x] Project [CLAUDE.md](CLAUDE.md): top-level statement that the project inherits SDLClaude/CLAUDE.md and SDLClaude wins in conflicts.
+- [x] [pyproject.toml](pyproject.toml): `line-length = 100` → `80` (SDLClaude §6).
+- [x] `examples/` → `claude_test/` rename with index README per SDLClaude §3. Update references in CLAUDE.md, ToDo.md, LearnedPatterns.md.
+- [x] Reformat new [LearnedPatterns.md](LearnedPatterns.md) entries E5/E6 from `Note/Rule` to `Problem/Cause/Fix/Rule` per SDLClaude §10. Provenance changed to `(from ToDo#6)`.
 - [x] Run `ruff format` to reflow all code to 80 cols; resolve any remaining `ruff check` / `mypy` / `pytest` failures.
-- [x] Create GitHub issue documenting this reconciliation per CommonClaude §4 (mandatory). Closed as [#1](https://github.com/coport-uni/SyringePumpController/issues/1).
-- [x] Going forward: every new task gets a `ToDo.md` append + `gh issue create` BEFORE work begins. Older LP entries (G1–G6, Q1, W1–W6, E1–E4) keep their existing format per CommonClaude §10 "Once the file exists, this bootstrap procedure no longer applies". Adopted: §16 / #2 / #3 / #4 / #5 all follow this flow.
+- [x] Create GitHub issue documenting this reconciliation per SDLClaude §4 (mandatory). Closed as [#1](https://github.com/coport-uni/SyringePumpController/issues/1).
+- [x] Going forward: every new task gets a `ToDo.md` append + `gh issue create` BEFORE work begins. Older LP entries (G1–G6, Q1, W1–W6, E1–E4) keep their existing format per SDLClaude §10 "Once the file exists, this bootstrap procedure no longer applies". Adopted: §16 / #2 / #3 / #4 / #5 all follow this flow.
 
 ## 16. Plunger initialization (2026-05-18, #2)
 
@@ -140,7 +140,7 @@ First plunger-motion API. Lands the canonical `/1ZR` init path designed in [DESI
 - [x] New `claude_test/syringe_init.py`: open `/dev/ttyUSB1`, run `diagnose()` (W1 rule), set stall current, `initialize(force=2)`, log pre- and post-init `?`/`?6` and elapsed time. No further motion. Capacity sweep (25/50/100/125 µL) verified the U200 operand table on real hardware.
 - [x] **Extended in session**: added `move_to_steps(steps, *, settle_timeout_s=10.0)` → `A<steps>R`, polls `?` until target matches. Added `claude_test/plunger_cycle.py` exercising max(12 000) → mid(6 000) → min(0) cycles. HIL: 9/9 cycles verified.
 - [x] Append [claude_test/README.md](claude_test/README.md) index rows for `syringe_init.py` and `plunger_cycle.py`, including HIL findings.
-- [x] HIL run produced real timings/observations → appended E7 (Z completion signal) and E8 (post-init V=4000 pps default) to [LearnedPatterns.md](LearnedPatterns.md) in CommonClaude §10 form.
+- [x] HIL run produced real timings/observations → appended E7 (Z completion signal) and E8 (post-init V=4000 pps default) to [LearnedPatterns.md](LearnedPatterns.md) in SDLClaude §10 form.
 - [x] Tick §6 lines for `initialize(...)` and `set_stall_current_for_syringe()`.
 - [x] §6 plunger-side `aspirate_uL` / `dispense_uL` (volume↔step conversion) — shipped in §19.
 - [ ] Remaining §6 plunger-side: `abort` + `requires_reinit` latch, `set_step_mode`, `raw(cmds)`. Defer.
@@ -165,9 +165,9 @@ writes a stall current that can damage a small syringe on the next init.
 - [x] Document hardware-protocol fact still in [CLAUDE.md](CLAUDE.md) "Stall current" section (kept as a reference table) but note the controller does not expose it.
 - [x] Update [README.md](README.md), [DESIGN.md](DESIGN.md), [claude_test/README.md](claude_test/README.md) to remove API references.
 
-## 18. CommonClaude resync to 2a8a597 (2026-05-21, #6)
+## 18. SDLClaude resync to 2a8a597 (2026-05-21, #6)
 
-Refresh the local CommonClaude inheritance pin. Upstream `main` merged
+Refresh the local SDLClaude inheritance pin. Upstream `main` merged
 `feat/c-language-support` (PR #26) on 2026-05-19, pivoting `CLAUDE.md`
 from language-neutral to C-focused and adding §11–§17 (Conventional
 Commits, GitHub Flow, .gitignore, SemVer, PR guidelines, pre-commit,
@@ -185,7 +185,7 @@ Decisions (confirmed 2026-05-21):
 3. **All 5 upstream hooks are mirrored verbatim and registered in
    `.claude/settings.json`** (PreToolUse Write|Edit/Bash/Read,
    PostToolUse Write|Edit, Stop).
-4. **No vendor snapshot** — keep CommonClaude as a URL reference; pin
+4. **No vendor snapshot** — keep SDLClaude as a URL reference; pin
    via commit SHA only.
 
 Pinned upstream commit:
@@ -198,9 +198,9 @@ Subject: feat(c): switch CLAUDE.md to C convention (PR #26)
 ```
 
 - [x] Cut working branch `feature/commonclaude-resync-2a8a597` from
-  `main` (CommonClaude §12.2 naming).
+  `main` (SDLClaude §12.2 naming).
 - [x] Open GitHub issue [#6](https://github.com/coport-uni/SyringePumpController/issues/6)
-  per CommonClaude §4 mandate.
+  per SDLClaude §4 mandate.
 - [ ] Update [CLAUDE.md](CLAUDE.md) `Authority order` — replace the
   `main` permalink with the `2a8a597...` permalink; add a
   pinned-at clause noting the previous pin `898ecf3`; expand the
@@ -228,15 +228,15 @@ Subject: feat(c): switch CLAUDE.md to C convention (PR #26)
 - [ ] Verification: `python -m json.tool .claude/settings.json`,
   `bash -n .claude/hooks/*.sh`, `.venv/bin/pytest`,
   `.venv/bin/ruff check src tests claude_test main.py`,
-  `gh api repos/coport-uni/CommonClaude/commits/<SHA> --jq .sha`.
-- [ ] Single commit per CommonClaude §11 Conventional Commits, closing
+  `gh api repos/coport-uni/SDLClaude/commits/<SHA> --jq .sha`.
+- [ ] Single commit per SDLClaude §11 Conventional Commits, closing
   #6.
-- [ ] `gh pr create` per CommonClaude §15.2 template.
+- [ ] `gh pr create` per SDLClaude §15.2 template.
 
 Out-of-scope (deliberate):
 
 - Upstream `LearnedPatterns.md` is **not** mirrored — its scope is
-  CommonClaude-self (Docker, jq, secret-scan) while local LP is
+  SDLClaude-self (Docker, jq, secret-scan) while local LP is
   hardware-specific (CH340, SY-01B, pyserial 3.x). Scopes differ.
 - `Concept.md` and `CLAUDECowork.md` are not mirrored (meta /
   other-workspace).
@@ -307,8 +307,8 @@ in [#7](https://github.com/coport-uni/SyringePumpController/issues/7).
 - [ ] If HIL surfaces a non-obvious behaviour (rounding drift,
   polling-termination edge), append a Problem / Cause / Fix / Rule
   entry to [LearnedPatterns.md](LearnedPatterns.md). Don't pre-write.
-- [ ] Single Conventional Commits commit per CommonClaude §11 closing
-  #7; `gh pr create` per CommonClaude §15.2 template.
+- [ ] Single Conventional Commits commit per SDLClaude §11 closing
+  #7; `gh pr create` per SDLClaude §15.2 template.
 
 Memory: `project-syringe-default` saved so future demos default to
 125 µL unless arithmetic clarity calls for another size.
@@ -385,7 +385,7 @@ controller initiative; firmware ships in a later phase (planned
   concurrency race), append a Problem / Cause / Fix / Rule
   entry to [LearnedPatterns.md](LearnedPatterns.md).
 - [ ] Single Conventional Commits commit closing #10;
-  `gh pr create` per CommonClaude §15.2 template.
+  `gh pr create` per SDLClaude §15.2 template.
 
 Out-of-scope for this server phase (handled later or never):
 
@@ -434,7 +434,7 @@ Stacked on top of [#10](https://github.com/coport-uni/SyringePumpController/issu
   voltage/valve/plunger via 2 s `lv_timer`); other tabs show
   "Phase C" placeholder labels and disabled controls.
 - [ ] `.clang-format` at repo root (LLVM, ColumnLimit 80) — first
-  C code in the repo per CommonClaude §2 + §6.
+  C code in the repo per SDLClaude §2 + §6.
 - [ ] `firmware/README.md` — how to build/flash, link back to root
   README and `server/README.md`.
 - [ ] Append commit-boundary bullet to [CLAUDE.md](CLAUDE.md)
@@ -450,7 +450,7 @@ Stacked on top of [#10](https://github.com/coport-uni/SyringePumpController/issu
   order, LVGL thread safety), append a Problem / Cause / Fix / Rule
   entry to [LearnedPatterns.md](LearnedPatterns.md).
 - [ ] Single Conventional Commits commit closing #12; `gh pr create`
-  per CommonClaude §15.2 template. PR depends on #11 merging first.
+  per SDLClaude §15.2 template. PR depends on #11 merging first.
 
 ## 22. ESP32-S3 firmware — motion UI (2026-05-21, #15)
 
@@ -547,7 +547,7 @@ rule — see open question at the bottom).
   deleted `tests/` and dropped an identical copy under
   `claude_test/tests/`). Removed the duplicate; `pytest` discovery via
   `testpaths=["tests"]` works again. Realigns with CLAUDE.md §3 /
-  CommonClaude §3 (production tests in `tests/`, bench scripts in
+  SDLClaude §3 (production tests in `tests/`, bench scripts in
   `claude_test/`).
 - [x] Add `server/pump.toml` to `.gitignore` — the file's own header
   claims it is git-excluded but `.gitignore` did not list it; keeps

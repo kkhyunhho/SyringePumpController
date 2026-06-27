@@ -135,7 +135,7 @@ persistent — re-run after every unplug/reset.
 ## Static analysis
 
 ```bash
-# Format check (must be clean — CommonClaude §6).
+# Format check (must be clean — SDLClaude §6).
 clang-format --dry-run --Werror firmware/main/*.c firmware/main/*.h
 
 # Style/warning check.

@@ -8,17 +8,17 @@ For the big picture and all shared conventions — the "one cell, many
 devices" architecture, code style, repo skeleton, codename naming, the
 driver API contract, the FastAPI `/v1` server standard, the hybrid
 integration model, testing strategy, and task/commit rules — see
-**CommonClaude** (`kkhyunhho/CommonClaude`), the single source of truth.
+**SDLClaude** (`kkhyunhho/SDLClaude`), the single source of truth.
 
 This file holds only what is specific to **SyringePumpController**: the
 SY-01B hardware, its protocol and command set, the error model, and this
 project's build/test commands and commit boundaries. Where this file is
-silent, CommonClaude governs.
+silent, SDLClaude governs.
 
 This project is a **device driver** for the codename **`sy01b`**: package
 [src/sy01b/](src/sy01b/), class `SyringePumpController`, console scripts
 `sy01b-diagnose` / `sy01b-server`. It is the reference implementation of
-the CommonClaude standard — the FastAPI `/v1` server pattern is extracted
+the SDLClaude standard — the FastAPI `/v1` server pattern is extracted
 from [server/](server/).
 
 ## Repository status
@@ -132,8 +132,8 @@ Coverage: pure-logic paths in `src/sy01b/` (frame builder, parser, status decode
 
 - **Planning trio commit:** DESIGN.md, ToDo.md, LearnedPatterns.md.
 - **Read-only API commit:** scaffolding + everything needed to open a port, run diagnose, retrieve software version (`?23`) and serial number (`?202`).
-- **Valve motion commit** (`2cabf13`): non-distribution + distribution valve API (`initialize_valve`, `set_valve_position`, `move_valve_to_port`, `wait_until_ready`) targeting the MCC-4 dual-selection valve. `claude_test/valve_toggle.py` drives real port-to-port toggling against `/dev/ttyUSB1` (per CommonClaude §3, bench/debug scripts live in `claude_test/`, indexed in `claude_test/README.md`).
-- **CommonClaude reconciliation commit** (`898ecf3`, closes #1): project subordinates itself to [coport-uni/CommonClaude](https://github.com/coport-uni/CommonClaude); `examples/` → `claude_test/` rename; line-length 100 → 80; LearnedPatterns E5/E6 reformatted to Problem/Cause/Fix/Rule.
+- **Valve motion commit** (`2cabf13`): non-distribution + distribution valve API (`initialize_valve`, `set_valve_position`, `move_valve_to_port`, `wait_until_ready`) targeting the MCC-4 dual-selection valve. `claude_test/valve_toggle.py` drives real port-to-port toggling against `/dev/ttyUSB1` (per SDLClaude §3, bench/debug scripts live in `claude_test/`, indexed in `claude_test/README.md`).
+- **SDLClaude reconciliation commit** (`898ecf3`, closes #1): project subordinates itself to [coport-uni/SDLClaude](https://github.com/coport-uni/SDLClaude); `examples/` → `claude_test/` rename; line-length 100 → 80; LearnedPatterns E5/E6 reformatted to Problem/Cause/Fix/Rule.
 - **Plunger init + step move commit** (`5d40437` + `8f7ac72`, closes #2): `initialize` (`Z<force>R` / `Y<force>R`, polls `?6 != "?"`) and `move_to_steps` (`A<n>R`, polls `?`). HIL-verified end-to-end at force=2 over a 125 µL syringe. `main.py` rewritten as an end-to-end tutorial covering every shipped public method; `claude_test/plunger_cycle.py` covers max/mid/min cycling. The µL-volume wrappers shipped later (see µL volume API commit below); the remaining plunger-side surface — `abort` + `requires_reinit` / `set_step_mode` / `raw()` — is intentionally absent, pinned by `TestNoPlungerMotionExposed` in `tests/test_plunger_motion_absent.py`.
 - **Stall-current removal commit** (`a777af3`): `set_stall_current_for_syringe` (`U200,<n>R` EEPROM write) was shipped in commit `5d40437` but later removed — the bench runs a single fixed syringe size and the EEPROM is set out-of-band, so an in-driver helper added more risk than value (wrong `syringe_uL` would write a damaging stall current). `Config.syringe_uL` is retained for future µL↔step conversion. `claude_test/syringe_init.py` (which depended on it) was deleted in the same commit.
 - **µL volume API commit** (closes #7): `aspirate_uL(target_uL)` and `dispense_uL(target_uL=0)` ship as thin wrappers over `move_to_steps` — both target an absolute *contained* volume and convert via `round(target_uL / Config.syringe_uL * full_stroke_steps)`. Both names share one wire frame; the split exists so the call site reads correctly (fill vs. drain). `Config.syringe_uL` default flipped `5000` → `125` to match the fixed bench syringe. `main.py` section 4 and `claude_test/plunger_cycle.py` rewritten to drive in µL; expected-step comparison verifies the rounding. Remaining plunger-side surface — `abort` + `requires_reinit` / `set_step_mode` / `raw()` — stays intentionally absent, pinned by `TestNoPlungerMotionExposed`.

@@ -1,6 +1,6 @@
 # claude_test/ — Bench scripts and one-off diagnostics
 
-This directory holds debug, exploratory, and diagnostic scripts per [CommonClaude/CLAUDE.md §3](https://github.com/coport-uni/CommonClaude/blob/main/CLAUDE.md). Scripts here are NOT part of CI/CD; production-quality tests live in [`tests/`](../tests/).
+This directory holds debug, exploratory, and diagnostic scripts per [SDLClaude/CLAUDE.md §3](https://github.com/coport-uni/SDLClaude/blob/main/CLAUDE.md). Scripts here are NOT part of CI/CD; production-quality tests live in [`tests/`](../tests/).
 
 When adding a new file, append a row to the table below describing what it does and the key finding(s) that came out of running it.
 
