@@ -112,11 +112,11 @@ Each code maps to a subclass of `SyringePumpController.Error` (`InitFailedError`
 
 ## Install
 
-Requires Python ≥ 3.12. All projects share one conda env, **`elec`**
+Requires Python ≥ 3.12. All projects share one conda env, **`sdl`**
 (new terminals activate it); install this package editable into it:
 
 ```bash
-conda activate elec
+conda activate sdl
 pip install -e ".[dev,server]"
 ```
 
@@ -249,7 +249,7 @@ Read-only HIL identity probes (`claude_test/hil_smoke.md`, `hil_identity.py`) ar
 ## Develop
 
 ```bash
-conda activate elec                                       # shared env
+conda activate sdl                                       # shared env
 ruff check src tests claude_test server main.py            # lint
 ruff format --check src tests claude_test server main.py   # format check
 mypy                                                       # strict types on src/sy01b + server

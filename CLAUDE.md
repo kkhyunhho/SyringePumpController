@@ -110,11 +110,11 @@ To regenerate the `.txt` files: `pdftotext -layout <file>.pdf` (requires `popple
 
 Stack: **Python ≥ 3.12**, **pyserial 3.x**, **DT ASCII protocol** (locked — never emit OEM frames from this codebase; the firmware locks to the first variant per power cycle). Architecture and rationale are in [DESIGN.md](DESIGN.md).
 
-All projects share one conda env, **`elec`** (Python 3.12), where every
+All projects share one conda env, **`sdl`** (Python 3.12), where every
 driver package is `pip install -e`'d. New terminals activate it.
 
 ```bash
-conda activate elec          # one-time: pip install -e ".[dev,server]"
+conda activate sdl          # one-time: pip install -e ".[dev,server]"
 
 ruff check src tests claude_test main.py          # lint
 ruff format --check src tests claude_test main.py # format check
